@@ -35,7 +35,18 @@ export function openAiChat(llm: Config["llm"], f: typeof fetch = fetch): Chat {
 
 /** The first JSON object in a reply (models wrap it in prose or fences now and then). */
 export function jsonIn<T>(text: string): T {
-  const start = text.indexOf("{"), end = text.lastIndexOf("}");
-  if (start < 0 || end <= start) throw new Error(`no JSON in the answer: ${text.slice(0, 200)}`);
-  return JSON.parse(text.slice(start, end + 1)) as T;
+  const start = text.indexOf("{");
+  if (start < 0) throw new Error("no JSON object in the answer");
+  let depth = 0, quoted = false, escaped = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (quoted) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') quoted = false;
+    } else if (ch === '"') quoted = true;
+    else if (ch === "{") depth++;
+    else if (ch === "}" && --depth === 0) return JSON.parse(text.slice(start, i + 1)) as T;
+  }
+  throw new Error("incomplete JSON object in the answer");
 }

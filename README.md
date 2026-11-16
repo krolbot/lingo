@@ -8,8 +8,9 @@ OpenAI-compatible endpoint** (OpenAI, OpenRouter, a local Ollama or vLLM, or a g
 
 - **One memory for everything an app shows**: UI labels, sentences produced at run time (health
   findings, AI summaries, notifications), names from configuration.
-- **Never in the way**: a caller says how long it can wait; what is not ready by then comes back in
-  the source language, marked `pending`, and is there next time. The client never throws.
+- **Bounded wait**: a caller says how long it can wait; what is not ready by then comes back in
+  the source language, marked `pending`, and is there next time. The included client falls back to
+  the original text on network failure.
 - **Glossary**: terms that stay as they are (product names, commands) and terms with a fixed
   translation, globally and per app. When an entry changes, translations it affected are made again.
 - **Checks**: placeholders (`{n}`, `%s`, `{{name}}`), code in backticks, URLs, numbers, HTML tags and
@@ -32,8 +33,30 @@ LINGO_ENV=.env npm start
 ```bash
 curl -s localhost:8790/v1/translate -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' \
   -d '{"to": "ja", "texts": ["{n} parts", {"text": "Home", "kind": "name", "context": "a place where machines stand"}]}'
-# {"translations":[{"text":"{n} 個の部品","source":"model"},{"text":"自宅","source":"model"}]}
+# The translations depend on the configured model; check `source` and `pending` before using them.
 ```
+
+## Docker Compose
+
+```bash
+cp .env.example .env
+# Configure LINGO_LLM_URL, LINGO_MODEL, and LINGO_LLM_KEY if the provider requires it.
+# Add th to LINGO_LANGS for Thai; set LINGO_ADMIN_PORT=8791 and LINGO_ADMIN_TOKEN
+# only if you need the review pages.
+docker compose up -d --build
+docker compose run --rm lingo node --import tsx src/cli.ts token create --app myapp
+```
+
+Save the generated app token in your secret manager. The API listens on `127.0.0.1:8790`
+on the host; the optional admin page listens on `127.0.0.1:8791`. Put authentication and HTTPS
+in front of them if remote access is needed. Do not publish either port directly to the Internet.
+SQLite (including translation memory, reviews, glossary, and app token hashes) persists in the
+`lingo-data` volume. Keep that volume when recreating the container, and back it up together with
+any glossary file you mount. `docker compose down -v` **deletes** that data.
+
+The container runs as the unprivileged `node` user, with no bundled model: `LINGO_LLM_URL` must be
+reachable **from inside the container** (a host's `127.0.0.1` is not the container's host). The
+service is a single SQLite writer; this Compose file does not support horizontal replicas.
 
 ## API
 
@@ -44,11 +67,11 @@ tag close to a supported one is mapped to it (`zh-TW` → `zh-Hant`, `fr-CA` →
 | | |
 |---|---|
 | `POST /v1/translate` | `{to, from?, texts: [string \| {text, context?, kind?: "name"}], wait?}` → `{translations: [{text, source, pending?}]}` in order. `source`: `memory`, `human`, `model`, `original` (could not be had), `same`. `wait` (ms, default 10000) is how long to wait for the model. At most 100 texts of 6000 characters. |
-| `POST /v1/catalog` | `{to: [lang], from?, entries: {key: text}, context?}` → `{catalogs: {lang: {key: text}}, missing: {lang: [key]}}`. Waits for everything; uses the catalog model. |
+| `POST /v1/catalog` | `{to: [lang], from?, entries: {key: text}, context?}` → `{catalogs: {lang: {key: text}}, missing: {lang: [key]}}`. Up to 10 requested languages and 100 entries per call, text at most 6000 characters. Waits for everything; uses the catalog model. The CLI splits larger catalogs into batches. |
 | `GET /v1/languages` | the supported languages (no token needed). |
 | `GET`, `PUT /v1/glossary` | this app's entries (with the global ones it does not shadow); `PUT {entries: [{term, rule: "keep" \| "fixed", to?: {lang: text}, note?}]}` replaces this app's. |
 | `PUT /v1/memory` | `{to, from?, text, translation}`: a person's translation. |
-| `GET /v1/memory?q=&lang=` | search this app's memory. |
+| `GET /v1/memory?q=&lang=&limit=` | search this app's memory; positive limit 1–500 (default 50). |
 
 In a catalog each entry's key is sent to the model with the context (`key: panel_open_url`), which tells it what a short label is for. `context` helps the model and is not part of the memory's key: the same text gets the same
 translation wherever it appears. Use a different text when you need a different translation.
@@ -82,7 +105,7 @@ With `LINGO_ADMIN_PORT` and `LINGO_ADMIN_TOKEN`, a second port serves pages for 
 - **Glossary**: global and per app.
 
 Every link and form is relative, so the pages work behind a proxy under any path. The token goes in
-`Authorization: Bearer` (a proxy that does your login adds it), or once as `?token=`, which sets a cookie.
+`Authorization: Bearer <token>` (a proxy that does your login adds it), or once as `?token=`, which sets a cookie. A token in a URL can enter proxy logs; prefer a trusted proxy that supplies the header.
 
 ## Client
 

@@ -42,6 +42,22 @@ describe("server", () => {
     expect((await app.inject({ url: "/v1/memory?q=fold&lang=ja", headers: auth })).json().rows[0]).toMatchObject({ source: "fold", text: "折りたたむ", origin: "human" });
   });
 
+  it("bounds catalogs and memory queries instead of silently dropping entries or removing LIMIT", async () => {
+    const { app } = setup();
+    const catalog = (payload: object) => app.inject({ method: "POST", url: "/v1/catalog", headers: auth, payload });
+    expect((await catalog({ to: ["ja"], entries: { bad: 3 } })).statusCode).toBe(400);
+    expect((await app.inject({ method: "PUT", url: "/v1/memory", headers: auth, payload: { to: "ja", text: 5, translation: "五" } })).statusCode).toBe(400);
+    expect((await app.inject({ method: "PUT", url: "/v1/glossary", headers: auth, payload: { entries: [{ term: "", rule: "keep" }] } })).statusCode).toBe(400);
+    expect((await catalog({ to: ["ja"], entries: Object.fromEntries(Array.from({ length: 101 }, (_, n) => [String(n), "text"])) })).statusCode).toBe(400);
+    expect((await catalog({ to: ["ja"], entries: { bad: "x".repeat(6001) } })).statusCode).toBe(400);
+    expect((await catalog({ to: Array.from({ length: 11 }, () => "ja"), entries: { ok: "x" } })).statusCode).toBe(400);
+    expect((await app.inject({ method: "POST", url: "/v1/translate", headers: auth, payload: { to: "ja", texts: [{ text: "x", context: "x".repeat(501) }] } })).statusCode).toBe(400);
+    expect((await app.inject({ url: "/v1/memory?limit=-1", headers: auth })).statusCode).toBe(400);
+    expect((await app.inject({ url: "/v1/memory?limit=abc", headers: auth })).statusCode).toBe(400);
+    await catalog({ to: ["ja"], entries: { ok: "x" } });
+    expect((await app.inject({ url: "/v1/memory?lang=ja-JP", headers: auth })).json().rows).toHaveLength(1);
+  });
+
   it("answers a monitor behind its own token", async () => {
     const { app } = setup();
     expect((await app.inject({ url: "/ops/health" })).statusCode).toBe(404);
@@ -67,5 +83,8 @@ describe("server", () => {
     expect(calls).toBe(1);
     const down = createClient({ url: "http://lingo", token: "tok", fetch: (async () => { throw new Error("ECONNREFUSED"); }) as typeof fetch });
     expect(await down.translate(["a"], "ja")).toEqual(["a"]);
+    const unavailable = createClient({ url: "http://lingo", token: "tok", fetch: (async () => new Response('{"error":"down"}', { status: 503 })) as typeof fetch });
+    expect(await unavailable.languages()).toEqual([]);
+    expect(await unavailable.languages()).toEqual([]);
   });
 });

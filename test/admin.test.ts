@@ -24,6 +24,7 @@ describe("admin", () => {
     const { admin } = await setup();
     expect((await admin.inject({ url: "/" })).statusCode).toBe(401);
     expect((await admin.inject({ url: "/", headers: { authorization: "Bearer nope" } })).statusCode).toBe(401);
+    expect((await admin.inject({ url: "/", headers: { cookie: "lingo_admin=%" } })).statusCode).toBe(401);
     const r = await admin.inject({ url: "/review?token=adm&app=ops" });
     expect(r.statusCode).toBe(303);
     expect(r.headers.location).toBe("review?app=ops");
@@ -46,7 +47,12 @@ describe("admin", () => {
     await admin.inject({ method: "POST", url: "/approve", ...form({ ...key, hash: hashOf("open") }) });
     expect((db.prepare("SELECT count(*) AS n FROM memory WHERE reviewed = 0").get() as { n: number }).n).toBe(0);
     await admin.inject({ method: "POST", url: "/retranslate", ...form({ ...key, hash: hashOf("open") }) });
-    expect(db.prepare("SELECT 1 FROM memory WHERE hash = ?").get(hashOf("open"))).toBeUndefined();
+    expect(db.prepare("SELECT 1 FROM memory WHERE hash = ?").get(hashOf("open"))).toBeDefined(); // reviewed translations survive
+    await engine.translate("ops", [{ text: "new text" }], "ja");
+    await admin.inject({ method: "POST", url: "/retranslate", ...form({ ...key, hash: hashOf("new text") }) });
+    expect(db.prepare("SELECT 1 FROM memory WHERE hash = ?").get(hashOf("new text"))).toBeUndefined();
+    await admin.inject({ method: "POST", url: "/retranslate", ...form({ ...key, hash: hashOf("Home") }) });
+    expect(db.prepare("SELECT 1 FROM memory WHERE hash = ?").get(hashOf("Home"))).toBeDefined(); // human translations survive
     // A link from a monitor to one text.
     expect((await admin.inject({ url: "/memory?app=ops&lang=ja&exact=1&q=Home", headers: auth })).body).toContain("自宅");
     // Back links go only to our own pages.

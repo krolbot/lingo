@@ -64,7 +64,7 @@ export function createEngine(db: Db, chat: Chat, cfg: Pick<Config, "llm" | "sour
   const touch = db.prepare("UPDATE memory SET used_at = datetime('now'), uses = uses + 1 WHERE app = ? AND hash = ? AND from_lang = ? AND lang = ?");
   const save = db.prepare(`INSERT INTO memory (app, hash, from_lang, lang, source, text, origin, terms, model, reviewed) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT (app, hash, from_lang, lang) DO UPDATE SET source = excluded.source, text = excluded.text, origin = excluded.origin, terms = excluded.terms, model = excluded.model, reviewed = excluded.reviewed, created_at = datetime('now')
-    WHERE memory.origin <> 'human' OR excluded.origin = 'human'`);
+    WHERE excluded.origin = 'human' OR (memory.origin = 'model' AND memory.reviewed = 0)`);
   const count = (app: string, lang: string, col: "hits" | "made" | "failed", n: number) => {
     if (n) db.prepare(`INSERT INTO usage (day, app, lang, ${col}) VALUES (date('now'), ?, ?, ?) ON CONFLICT (day, app, lang) DO UPDATE SET ${col} = ${col} + excluded.${col}`).run(app, lang, n);
   };

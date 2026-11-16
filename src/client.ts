@@ -76,7 +76,9 @@ export function createClient(o: ClientOptions): Client {
       if (langs && langs.until > Date.now()) return langs.list;
       try {
         const res = await f(`${base}/v1/languages`, { signal: AbortSignal.timeout(o.timeoutMs ?? 8000) });
-        const body = (await res.json()) as { languages: string[] };
+        if (!res.ok) return langs?.list ?? [];
+        const body = (await res.json()) as { languages?: unknown };
+        if (!Array.isArray(body.languages) || !body.languages.every((l) => typeof l === "string")) return langs?.list ?? [];
         langs = { list: body.languages, until: Date.now() + ttl };
         return body.languages;
       } catch {

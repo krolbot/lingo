@@ -48,7 +48,7 @@ const rowHtml = (r: Row, back: string) => {
   const keys = `<input type="hidden" name="app" value="${esc(r.app)}"><input type="hidden" name="hash" value="${esc(r.hash)}"><input type="hidden" name="from" value="${esc(r.from_lang)}"><input type="hidden" name="lang" value="${esc(r.lang)}"><input type="hidden" name="source" value="${esc(r.source)}"><input type="hidden" name="back" value="${esc(back)}">`;
   return `<tr id="${esc(r.hash.slice(0, 12))}-${esc(r.lang)}"><td class="src">${r.source ? esc(r.source) : '<span class="muted">(imported without its source)</span>'}<div class="muted" style="font-size:12px">${esc(r.app)} · ${esc(r.from_lang)} → ${esc(r.lang)} · <span class="tag ${esc(r.origin)}">${esc(r.origin)}${r.reviewed ? "" : ", not reviewed"}</span> · used ${r.uses}× · ${esc(r.used_at)}</div></td>
 <td><form method="post" action="save">${keys}<textarea name="text" rows="${Math.min(6, Math.max(2, Math.ceil(r.text.length / 60)))}" lang="${esc(r.lang)}">${esc(r.text)}</textarea>
-<div class="actions"><button class="primary">Save as correct</button>${r.reviewed ? "" : `<button formaction="approve">Looks right</button>`}${r.source ? `<button formaction="retranslate" title="Forget it; the model makes it again the next time it is asked for">Translate again</button>` : ""}</div></form></td></tr>`;
+<div class="actions"><button class="primary">Save as correct</button>${r.reviewed ? "" : `<button formaction="approve">Looks right</button>`}${r.source && r.origin === "model" && !r.reviewed ? `<button formaction="retranslate" title="Forget it; the model makes it again the next time it is asked for">Translate again</button>` : ""}</div></form></td></tr>`;
 };
 
 export function buildAdmin(cfg: Config, db: Db): FastifyInstance {
@@ -73,7 +73,9 @@ export function buildAdmin(cfg: Config, db: Db): FastifyInstance {
       const clean = req.url.replace(/([?&])token=[^&]*&?/, "$1").replace(/[?&]$/, "");
       return reply.redirect(clean.slice(clean.lastIndexOf("/", clean.indexOf("?") < 0 ? undefined : clean.indexOf("?")) + 1) || "./", 303);
     }
-    if (!ok(bearer) && !ok(decodeURIComponent(cookie))) return reply.code(401).type("text/plain").send("lingo admin: a valid token is needed (Authorization: Bearer, or ?token= once)");
+    let decoded = "";
+    try { decoded = decodeURIComponent(cookie); } catch { /* malformed cookie is not a credential */ }
+    if (!ok(bearer) && !ok(decoded)) return reply.code(401).type("text/plain").send("lingo admin: a valid token is needed (Authorization: Bearer, or ?token= once)");
   });
 
   const apps = () => (db.prepare("SELECT DISTINCT app FROM memory UNION SELECT DISTINCT app FROM tokens ORDER BY 1").all() as Array<{ app: string }>).map((r) => r.app);
@@ -161,7 +163,7 @@ ${own.map((e) => `<tr><td>${esc(e.term)}</td><td>${esc(e.rule)}</td><td>${Object
   });
   app.post<{ Body: Form }>("/retranslate", async (req, reply) => {
     const f = req.body ?? {};
-    db.prepare("DELETE FROM memory WHERE app = ? AND hash = ? AND from_lang = ? AND lang = ? AND source <> ''").run(one(f, "app"), one(f, "hash"), one(f, "from"), one(f, "lang"));
+    db.prepare("DELETE FROM memory WHERE app = ? AND hash = ? AND from_lang = ? AND lang = ? AND source <> '' AND origin = 'model' AND reviewed = 0").run(one(f, "app"), one(f, "hash"), one(f, "from"), one(f, "lang"));
     return reply.redirect(backTo(f), 303);
   });
   app.post<{ Body: Form }>("/glossary/add", async (req, reply) => {

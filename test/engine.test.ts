@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import { textProblems } from "../src/checks.ts";
 import { openDb } from "../src/db.ts";
 import { createEngine, hashOf } from "../src/engine.ts";
-import { setEntries } from "../src/glossary.ts";
+import { glossaryProblems, setEntries } from "../src/glossary.ts";
 import { normalize, pick } from "../src/lang.ts";
-import type { Chat, Message } from "../src/llm.ts";
+import { jsonIn, type Chat, type Message } from "../src/llm.ts";
 
 const cfg = { sourceLang: "en", llm: { url: "", key: "", model: "fast", catalogModel: "careful", responseFormat: "", timeoutMs: 1000 } };
 const itemsOf = (m: Message[]) => (JSON.parse(m[1]!.content) as { items: Array<{ text: string; fix?: string[] }> }).items;
@@ -79,6 +79,19 @@ describe("engine", () => {
     expect(calls).toHaveLength(0);
   });
 
+  it("a model finishing late cannot overwrite a person's correction", async () => {
+    const db = openDb(":memory:");
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const model: Chat = async (name, messages) => (await gate, fakeModel([])(name, messages));
+    const e = createEngine(db, model, cfg);
+    expect(await e.translate("ops", [{ text: "Home" }], "ja", { wait: 1 })).toEqual([{ text: "Home", source: "original", pending: true }]);
+    e.setHuman("ops", "en", "ja", "Home", "ホーム");
+    release();
+    await new Promise((r) => setTimeout(r, 20));
+    expect((await e.translate("ops", [{ text: "Home" }], "ja"))[0]).toEqual({ text: "ホーム", source: "human" });
+  });
+
   it("gives the source back at once when the caller cannot wait, and has the translation next time", async () => {
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
@@ -100,6 +113,22 @@ describe("engine", () => {
 });
 
 describe("checks and languages", () => {
+  it("reads only the first complete model JSON object, respecting braces inside strings", () => {
+    expect(jsonIn<{ translations: string[] }>('Here: {"translations":["a { brace \\\" in text"]}\nNote: {retry}')).toEqual({ translations: ['a { brace " in text'] });
+  });
+
+  it("does not accept a changed protected word merely because it is a substring", () => {
+    const entries = [{ term: "Workday", rule: "keep" as const }];
+    expect(glossaryProblems(entries, "Workdays", "ja")).toEqual(['"Workday" must stay as it is']);
+    expect(glossaryProblems(entries, "Workday", "ja")).toEqual([]);
+  });
+  it("rejects an invalid glossary before changing existing entries", () => {
+    const db = openDb(":memory:");
+    setEntries(db, "ops", [{ term: "Workday", rule: "keep" }]);
+    expect(() => setEntries(db, "ops", [{ term: "", rule: "keep" }])).toThrow("invalid glossary entries");
+    expect(db.prepare("SELECT term FROM glossary WHERE scope = ?").get("ops")).toMatchObject({ term: "Workday" });
+  });
+
   it("wants placeholders, code, URLs, tags and numbers carried over", () => {
     expect(textProblems("{n} parts at https://x.example/a in `ops.json`", "{n} 个部件 https://x.example/a `ops.json`")).toEqual([]);
     expect(textProblems("1,370 sites, 1.5 h", "1370 sites, 1,5 h")).toEqual([]);

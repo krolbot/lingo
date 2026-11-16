@@ -15,13 +15,21 @@ export interface Entry {
   note?: string;
 }
 
-const isEntry = (e: unknown): e is Entry => !!e && typeof (e as Entry).term === "string" && ((e as Entry).rule === "keep" || (e as Entry).rule === "fixed");
+const isEntry = (e: unknown): e is Entry => {
+  if (!e || typeof e !== "object") return false;
+  const { term, rule, to, note } = e as Partial<Entry>;
+  return typeof term === "string" && !!term.trim() && (rule === "keep" || rule === "fixed") &&
+    (note === undefined || typeof note === "string") &&
+    (to === undefined || (to !== null && typeof to === "object" && !Array.isArray(to) && Object.values(to).every((v) => typeof v === "string")));
+};
+
+export const validEntries = (entries: unknown): entries is Entry[] => Array.isArray(entries) && entries.every(isEntry);
 
 /** The global glossary file: a JSON array of entries. */
 export function readGlossaryFile(path: string): Entry[] {
   const raw = JSON.parse(readFileSync(path, "utf8")) as unknown;
-  if (!Array.isArray(raw)) throw new Error(`${path}: expected a JSON array of {term, rule, to?, note?}`);
-  return raw.filter(isEntry);
+  if (!validEntries(raw)) throw new Error(`${path}: expected a JSON array of valid {term, rule, to?, note?} entries`);
+  return raw;
 }
 
 /** Replaces the global entries in the database with the file's. */
@@ -30,11 +38,12 @@ export function loadGlossaryFile(db: Db, path: string) {
 }
 
 export function setEntries(db: Db, scope: string, entries: Entry[]) {
+  if (!validEntries(entries)) throw new Error("invalid glossary entries");
   db.exec("BEGIN");
   try {
     db.prepare("DELETE FROM glossary WHERE scope = ?").run(scope);
     const ins = db.prepare("INSERT INTO glossary (scope, term, rule, tr, note) VALUES (?, ?, ?, ?, ?)");
-    for (const e of entries.filter(isEntry)) ins.run(scope, e.term, e.rule, JSON.stringify(e.to ?? {}), e.note ?? "");
+    for (const e of entries) ins.run(scope, e.term, e.rule, JSON.stringify(e.to ?? {}), e.note ?? "");
     db.exec("COMMIT");
   } catch (err) {
     db.exec("ROLLBACK");
@@ -71,7 +80,7 @@ export function glossaryProblems(entries: Entry[], translation: string, lang: st
   const out: string[] = [];
   for (const e of entries) {
     // Case may follow the sentence ("Ingest" at its start); the word itself must stay.
-    if (e.rule === "keep" && !translation.toLowerCase().includes(e.term.toLowerCase())) out.push(`"${e.term}" must stay as it is`);
+    if (e.rule === "keep" && !pattern(e.term).test(translation)) out.push(`"${e.term}" must stay as it is`);
     if (e.rule === "fixed" && e.to?.[lang] && !translation.includes(e.to[lang])) out.push(`"${e.term}" must be "${e.to[lang]}"`);
   }
   return out;

@@ -131,11 +131,12 @@ export function registerOps(app: FastifyInstance, cfg: Config, db: Db, engine: E
   function metrics() {
     const rows = db.prepare("SELECT app, lang, sum(hits) AS hits, sum(made) AS made, sum(failed) AS failed FROM usage GROUP BY app, lang").all() as Array<{ app: string; lang: string; hits: number; made: number; failed: number }>;
     const memory = db.prepare("SELECT app, origin, count(*) AS n FROM memory GROUP BY app, origin").all() as Array<{ app: string; origin: string; n: number }>;
+    const label = (value: string) => value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n");
     return [
       "# TYPE lingo_texts_total counter",
-      ...rows.flatMap((r) => (["hits", "made", "failed"] as const).map((k) => `lingo_texts_total{app="${r.app}",lang="${r.lang}",outcome="${k}"} ${r[k]}`)),
+      ...rows.flatMap((r) => (["hits", "made", "failed"] as const).map((k) => `lingo_texts_total{app="${label(r.app)}",lang="${label(r.lang)}",outcome="${k}"} ${r[k]}`)),
       "# TYPE lingo_memory_rows gauge",
-      ...memory.map((m) => `lingo_memory_rows{app="${m.app}",origin="${m.origin}"} ${m.n}`),
+      ...memory.map((m) => `lingo_memory_rows{app="${label(m.app)}",origin="${label(m.origin)}"} ${m.n}`),
       "# TYPE lingo_model_calls_total counter",
       `lingo_model_calls_total{outcome="ok"} ${engine.stats.calls - engine.stats.failedCalls}`,
       `lingo_model_calls_total{outcome="failed"} ${engine.stats.failedCalls}`,
