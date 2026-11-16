@@ -21,6 +21,8 @@ export interface Config {
     responseFormat: string;
     timeoutMs: number;
   };
+  /** Optional local OpenAI-compatible model server, reachable from the application container. */
+  local?: Config["llm"];
   /** A JSON file with the global glossary, read at start-up (entries the API cannot change). */
   glossaryFile?: string;
   /** The admin pages' port and bearer/form sign-in token; no port, no admin pages. */
@@ -77,6 +79,14 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
       responseFormat: env.LINGO_RESPONSE_FORMAT ?? "",
       timeoutMs: Number(env.LINGO_LLM_TIMEOUT_MS ?? 60_000),
     },
+    ...(env.LINGO_LOCAL_LLM_URL ? { local: {
+      url: env.LINGO_LOCAL_LLM_URL.replace(/\/+$/, ""),
+      key: env.LINGO_LOCAL_LLM_KEY ?? "",
+      model: env.LINGO_LOCAL_MODEL ?? "hy-mt2-7b",
+      catalogModel: env.LINGO_LOCAL_MODEL ?? "hy-mt2-7b",
+      responseFormat: "json_schema",
+      timeoutMs: Number(env.LINGO_LOCAL_LLM_TIMEOUT_MS ?? 180_000),
+    } } : {}),
     glossaryFile: env.LINGO_GLOSSARY || undefined,
     adminPort: env.LINGO_ADMIN_PORT ? Number(env.LINGO_ADMIN_PORT) : undefined,
     adminToken: env.LINGO_ADMIN_TOKEN || undefined,

@@ -5,10 +5,11 @@ import { fileURLToPath } from "node:url";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import type { Config } from "./config.ts";
 import type { Db } from "./db.ts";
+import type { Channel, Engine } from "./engine.ts";
 import { setEntries, type Entry } from "./glossary.ts";
 
 /** The admin API is separate from the translation API; the browser bundle is public, data is not. */
-export function buildAdmin(cfg: Config, db: Db): FastifyInstance {
+export function buildAdmin(cfg: Config, db: Db, engine: Engine): FastifyInstance {
   const app = Fastify({ logger: false });
   const index = readFileSync(fileURLToPath(new URL("../dist/admin/index.html", import.meta.url)), "utf8");
   const assets = new URL("../dist/admin/assets/", import.meta.url);
@@ -24,7 +25,7 @@ export function buildAdmin(cfg: Config, db: Db): FastifyInstance {
   app.addHook("onRequest", async (req: FastifyRequest, reply: FastifyReply) => {
     reply.header("cache-control", "no-store");
     if (req.method === "POST" && req.url === "/login") return;
-    if (req.method === "GET" && (/^\/(?:review|memory|glossary)?(?:\?.*)?$/.test(req.url) || /^\/assets\//.test(req.url))) return;
+    if (req.method === "GET" && (/^\/(?:review|memory|glossary|channels)?(?:\?.*)?$/.test(req.url) || /^\/assets\//.test(req.url))) return;
     const bearer = req.headers.authorization?.replace(/^Bearer\s+/i, "") ?? "";
     const cookie = /(?:^|;\s*)lingo_admin=([^;]+)/.exec(req.headers.cookie ?? "")?.[1] ?? "";
     let decoded = "";
@@ -52,9 +53,26 @@ export function buildAdmin(cfg: Config, db: Db): FastifyInstance {
       throw err;
     }
   });
-  for (const path of ["/", "/review", "/memory", "/glossary"]) app.get(path, async (_req, reply) => reply.type("text/html").send(index));
+  for (const path of ["/", "/review", "/memory", "/glossary", "/channels"]) app.get(path, async (_req, reply) => reply.type("text/html").send(index));
   const apps = () => (db.prepare("SELECT DISTINCT app FROM memory UNION SELECT DISTINCT app FROM tokens ORDER BY 1").all() as Array<{ app: string }>).map((r) => r.app);
   app.get("/api/options", async () => ({ apps: apps(), langs: cfg.langs.filter((l) => l !== cfg.sourceLang) }));
+  app.get("/api/channels", async () => engine.channels());
+  app.post<{ Body: { channel?: Channel } }>("/api/channels", async (req, reply) => {
+    const selected = req.body?.channel;
+    if (selected !== "remote" && selected !== "local" || !engine.channels().available.includes(selected)) return reply.code(400).send({ error: "channel is unavailable" });
+    engine.setDefaultChannel(selected);
+    return engine.channels();
+  });
+  app.post<{ Body: { app?: string; to?: string; text?: string; channel?: Channel } }>("/api/translate", async (req, reply) => {
+    const { app: scope, to, text, channel } = req.body ?? {};
+    if (typeof scope !== "string" || !apps().includes(scope) || typeof to !== "string" || !cfg.langs.includes(to) ||
+      typeof text !== "string" || !text.trim() || text.length > 6000 ||
+      (channel !== "remote" && channel !== "local") || !engine.channels().available.includes(channel)) {
+      return reply.code(400).send({ error: "app, language, text and an available channel are required" });
+    }
+    const [translation] = await engine.translate(scope, [{ text }], to, { channel, wait: 120_000 });
+    return { channel, translation };
+  });
   const where = (v: { app?: string; lang?: string; q?: string }, extra: string[] = []) => {
     const parts = [...extra], args: string[] = [];
     if (v.app) { parts.push("app = ?"); args.push(v.app); }

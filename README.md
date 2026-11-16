@@ -19,7 +19,7 @@ OpenAI-compatible endpoint** (OpenAI, OpenRouter, a local Ollama or vLLM, or a g
 - **People win**: a translation set by a person is used from then on and never replaced by the model.
 - **Catalogs at build time**: turn your `en.json` into `ja.json`, `fr.json`… before a release, from
   the same memory, so static UI text costs nothing at run time and can be reviewed in your repo.
-- **Small**: Node 22.13+, Fastify, the built-in `node:sqlite`. No native modules, no other services.
+- **Small application**: Node 22.13+, Fastify, the built-in `node:sqlite`; the optional local model runs in a separate container.
 
 ## Quick start
 
@@ -41,14 +41,21 @@ curl -s localhost:8790/v1/translate -H "authorization: Bearer $TOKEN" -H 'conten
 ```bash
 cp .env.example .env
 # Configure LINGO_LLM_URL, LINGO_MODEL, and LINGO_LLM_KEY if the provider requires it.
-# Add th to LINGO_LANGS for Thai; set LINGO_ADMIN_PORT=8791 and LINGO_ADMIN_TOKEN
-# only if you need the review pages.
+# Set LINGO_ADMIN_PORT=8791 and LINGO_ADMIN_TOKEN only if you need the review pages.
 # The Docker network named caddy must already exist on the host with Caddy.
+mkdir -p models
+curl --fail --location --retry 3 -o models/Hy-MT2-7B-Q4_K_M.gguf.part \
+  'https://huggingface.co/tencent/Hy-MT2-7B-GGUF/resolve/707464294cf5b2a5a69982855020858ed58cf1d1/Hy-MT2-7B-Q4_K_M.gguf'
+printf '%s  %s\n' 9f96256500f3fc1ab4d64336b58f52a949a95ad7516b0c229476eef782f9f77b models/Hy-MT2-7B-Q4_K_M.gguf.part | sha256sum -c -
+mv models/Hy-MT2-7B-Q4_K_M.gguf.part models/Hy-MT2-7B-Q4_K_M.gguf
 docker compose up -d --build
 docker compose run --rm lingo node --import tsx src/cli.ts token create --app myapp
 ```
 
-Save the generated app token in your secret manager. Compose publishes **no host ports**. Caddy
+Save the generated app token in your secret manager. Compose publishes **no host ports**. The llama.cpp
+sidecar uses the private `lingo-internal` network and mounts the verified GGUF read-only; the default
+channel stays `remote` until an administrator changes it. On a CPU-only host, model output is slower
+than the remote channel. Keep `models/` outside image builds and backups of SQLite. Caddy
 must share the external Docker network `caddy` with lingo: proxy the API to `lingo:8790`, and
 the optional admin page to `lingo:8791` when `LINGO_ADMIN_PORT=8791` and `LINGO_ADMIN_TOKEN`
 are set. Configure Caddy's HTTPS and access policy separately; this repository does not define
@@ -58,7 +65,7 @@ SQLite (including translation memory, reviews, glossary, and app token hashes) p
 `lingo-data` volume. Keep that volume when recreating the container, and back it up together with
 any glossary file you mount. `docker compose down -v` **deletes** that data.
 
-The container runs as the unprivileged `node` user, with no bundled model: `LINGO_LLM_URL` must be
+The application container runs as the unprivileged `node` user; `LINGO_LLM_URL` must be
 reachable **from inside the container** (a host's `127.0.0.1` is not the container's host). The
 service is a single SQLite writer; this Compose file does not support horizontal replicas.
 
@@ -70,8 +77,9 @@ tag close to a supported one is mapped to it (`zh-TW` → `zh-Hant`, `fr-CA` →
 
 | | |
 |---|---|
-| `POST /v1/translate` | `{to, from?, texts: [string \| {text, context?, kind?: "name"}], wait?}` → `{translations: [{text, source, pending?}]}` in order. `source`: `memory`, `human`, `model`, `original` (could not be had), `same`. `wait` (ms, default 10000) is how long to wait for the model. At most 100 texts of 6000 characters. |
-| `POST /v1/catalog` | `{to: [lang], from?, entries: {key: text}, context?}` → `{catalogs: {lang: {key: text}}, missing: {lang: [key]}}`. Up to 10 requested languages and 100 entries per call, text at most 6000 characters. Waits for everything; uses the catalog model. The CLI splits larger catalogs into batches. |
+| `POST /v1/translate` | `{to, from?, texts: [string \| {text, context?, kind?: "name"}], wait?, channel?}` → `{channel, translations: [{text, source, pending?}]}` in order. `source`: `memory`, `human`, `model`, `original` (could not be had), `same`. `wait` (ms, default 10000) is how long to wait for the model. At most 100 texts of 6000 characters. |
+| `POST /v1/catalog` | `{to: [lang], from?, entries: {key: text}, context?, channel?}` → `{channel, catalogs: {lang: {key: text}}, missing: {lang: [key]}}`. Up to 10 requested languages and 100 entries per call, text at most 6000 characters. Waits for everything; uses the catalog model. The CLI splits larger catalogs into batches; `--channel remote\|local` selects its channel. |
+| `GET /v1/channels` | available channels and the current default (requires an app token). `channel` is `remote` or `local`; an explicit request choice overrides the default. Invalid or unconfigured choices return 400, never silently fall back to the other provider. |
 | `GET /v1/languages` | the supported languages (no token needed). |
 | `GET`, `PUT /v1/glossary` | this app's entries (with the global ones it does not shadow); `PUT {entries: [{term, rule: "keep" \| "fixed", to?: {lang: text}, note?}]}` replaces this app's. |
 | `PUT /v1/memory` | `{to, from?, text, translation}`: a person's translation. |
@@ -108,6 +116,7 @@ admin app using native Gravity UI UIKit components and its default theme (system
 - **Память**: search either language; `memory?app=…&lang=…&q=<source>&exact=1` opens one text, for a
   "this translation is wrong" link from your app.
 - **Глоссарий**: global and per app.
+- **Каналы**: choose the default model and translate an individual text through the selected channel.
 
 Navigation and static assets resolve relative to the mounted URL, so the app works behind a proxy
 under any path. Opening the panel without a session shows a token sign-in form. Submit
@@ -150,6 +159,11 @@ See [.env.example](.env.example). The model is anything that speaks `POST {LINGO
 Two models can be set: `LINGO_MODEL` for texts asked for at run time (fast, cheap) and
 `LINGO_CATALOG_MODEL` for catalogs (careful). With a gateway that routes by name, these can be
 purpose names rather than model names.
+Outside Compose, `LINGO_LOCAL_LLM_URL` enables the `local` channel; `LINGO_LOCAL_MODEL` and
+`LINGO_LOCAL_LLM_TIMEOUT_MS` configure it. Compose provides these values and the GGUF sidecar.
+The default is stored in SQLite through the admin panel; existing imported or human-reviewed texts
+are shared across channels, while unreviewed model translations are regenerated when the channel
+changes. The application never auto-routes to a different model on an error.
 
 What is sent to the model: the texts to translate, their context and the glossary entries they
 mention. Do not send secrets for translation.

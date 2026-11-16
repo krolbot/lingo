@@ -31,6 +31,7 @@ export interface Result {
 
 export interface Options {
   from?: string;
+  channel?: Channel;
   /** How long to wait for the model, in ms; what is not done by then comes back pending. */
   wait?: number;
   /** Building a catalog: the careful model, bigger batches. */
@@ -38,11 +39,14 @@ export interface Options {
 }
 
 export const hashOf = (text: string) => createHash("sha256").update(text.trim()).digest("hex");
+export type Channel = "remote" | "local";
 
 interface Row {
   text: string;
   origin: string;
   terms: string;
+  model: string;
+  reviewed: number;
 }
 
 const BATCH = 20, CATALOG_BATCH = 40;
@@ -57,10 +61,10 @@ export interface Stats {
   lastFailed: boolean;
 }
 
-export function createEngine(db: Db, chat: Chat, cfg: Pick<Config, "llm" | "sourceLang">) {
+export function createEngine(db: Db, chat: Chat, cfg: Pick<Config, "llm" | "local" | "sourceLang">, localChat?: Chat) {
   const inflight = new Map<string, Promise<string | null>>();
   const stats: Stats = { calls: 0, failedCalls: 0, lastError: "", lastErrorAt: 0, lastOkAt: 0, lastFailed: false };
-  const lookup = db.prepare("SELECT text, origin, terms FROM memory WHERE app = ? AND hash = ? AND from_lang = ? AND lang = ?");
+  const lookup = db.prepare("SELECT text, origin, terms, model, reviewed FROM memory WHERE app = ? AND hash = ? AND from_lang = ? AND lang = ?");
   const touch = db.prepare("UPDATE memory SET used_at = datetime('now'), uses = uses + 1 WHERE app = ? AND hash = ? AND from_lang = ? AND lang = ?");
   const save = db.prepare(`INSERT INTO memory (app, hash, from_lang, lang, source, text, origin, terms, model, reviewed) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT (app, hash, from_lang, lang) DO UPDATE SET source = excluded.source, text = excluded.text, origin = excluded.origin, terms = excluded.terms, model = excluded.model, reviewed = excluded.reviewed, created_at = datetime('now')
@@ -68,9 +72,17 @@ export function createEngine(db: Db, chat: Chat, cfg: Pick<Config, "llm" | "sour
   const count = (app: string, lang: string, col: "hits" | "made" | "failed", n: number) => {
     if (n) db.prepare(`INSERT INTO usage (day, app, lang, ${col}) VALUES (date('now'), ?, ?, ?) ON CONFLICT (day, app, lang) DO UPDATE SET ${col} = ${col} + excluded.${col}`).run(app, lang, n);
   };
+  const channels = () => ({
+    available: cfg.local ? ["remote", "local"] as Channel[] : ["remote"] as Channel[],
+    default: cfg.local && (db.prepare("SELECT value FROM settings WHERE key = 'channel'").get() as { value: Channel } | undefined)?.value === "local" ? "local" as Channel : "remote" as Channel,
+  });
+  const setDefaultChannel = (channel: Channel) => {
+    if (!channels().available.includes(channel)) throw new Error("channel is unavailable");
+    db.prepare("INSERT INTO settings (key, value) VALUES ('channel', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value").run(channel);
+  };
 
   /** One model call for a batch; the translations in order, null where the answer was unusable. */
-  async function ask(items: Array<Item & { entries: Entry[] }>, from: string, to: string, model: string, problems?: string[][]): Promise<Array<string | null>> {
+  async function ask(items: Array<Item & { entries: Entry[] }>, from: string, to: string, model: string, channel: Channel, problems?: string[][]): Promise<Array<string | null>> {
     const entries = [...new Map(items.flatMap((i) => i.entries).map((e) => [e.term, e])).values()];
     const system = [
       `You translate text for software from ${languageName(from)} into ${languageName(to)}.`,
@@ -85,7 +97,7 @@ export function createEngine(db: Db, chat: Chat, cfg: Pick<Config, "llm" | "sour
     stats.calls++;
     let answer: string;
     try {
-      answer = await chat(model, [{ role: "system", content: system }, { role: "user", content: JSON.stringify(payload) }]);
+      answer = await (channel === "local" ? localChat! : chat)(model, [{ role: "system", content: system }, { role: "user", content: JSON.stringify(payload) }]);
       stats.lastOkAt = Date.now();
       stats.lastFailed = false;
     } catch (err) {
@@ -106,14 +118,16 @@ export function createEngine(db: Db, chat: Chat, cfg: Pick<Config, "llm" | "sour
 
   /** Makes, checks, retries once, keeps. Resolves each item's promise with the translation or null. */
   async function make(app: string, jobs: Array<{ key: string; item: Item; entries: Entry[]; terms: string; done: (t: string | null) => void }>, from: string, to: string, opts: Options) {
-    const model = opts.catalog ? cfg.llm.catalogModel : cfg.llm.model;
-    const size = opts.catalog ? CATALOG_BATCH : BATCH;
+    const channel = opts.channel!;
+    const llm = channel === "local" ? cfg.local! : cfg.llm;
+    const model = opts.catalog ? llm.catalogModel : llm.model;
+    const size = channel === "local" ? 4 : opts.catalog ? CATALOG_BATCH : BATCH;
     for (let i = 0; i < jobs.length; i += size) {
       const batch = jobs.slice(i, i + size);
-      const first = await ask(batch.map((j) => ({ ...j.item, entries: j.entries })), from, to, model);
+      const first = await ask(batch.map((j) => ({ ...j.item, entries: j.entries })), from, to, model, channel);
       const issues = batch.map((j, n) => (first[n] == null ? ["no answer"] : [...textProblems(j.item.text, first[n]!), ...glossaryProblems(j.entries, first[n]!, to)]));
       const again = batch.map((_, n) => n).filter((n) => issues[n]!.length);
-      const second = again.length ? await ask(again.map((n) => ({ ...batch[n]!.item, entries: batch[n]!.entries })), from, to, model, again.map((n) => issues[n]!)) : [];
+      const second = again.length ? await ask(again.map((n) => ({ ...batch[n]!.item, entries: batch[n]!.entries })), from, to, model, channel, again.map((n) => issues[n]!)) : [];
       let made = 0, failed = 0;
       batch.forEach((j, n) => {
         let t: string | null = issues[n]!.length ? null : first[n]!;
@@ -123,7 +137,7 @@ export function createEngine(db: Db, chat: Chat, cfg: Pick<Config, "llm" | "sour
           t = s != null && !textProblems(j.item.text, s).length && !glossaryProblems(j.entries, s, to).length ? s : null;
         }
         if (t != null) {
-          save.run(app, hashOf(j.item.text), from, to, j.item.text.trim(), t.trim(), "model", j.terms, model, 0);
+          save.run(app, hashOf(j.item.text), from, to, j.item.text.trim(), t.trim(), "model", j.terms, `${channel}:${model}`, 0);
           made++;
         } else failed++;
         j.done(t?.trim() ?? null);
@@ -134,6 +148,11 @@ export function createEngine(db: Db, chat: Chat, cfg: Pick<Config, "llm" | "sour
   }
 
   async function translate(app: string, items: Item[], to: string, opts: Options = {}): Promise<Result[]> {
+    const channel = opts.channel ?? channels().default;
+    if (!channels().available.includes(channel)) throw new Error("channel is unavailable");
+    opts = { ...opts, channel };
+    const llm = channel === "local" ? cfg.local! : cfg.llm;
+    const model = opts.catalog ? llm.catalogModel : llm.model;
     const from = opts.from ?? cfg.sourceLang;
     if (from === to) return items.map((i) => ({ text: i.text, source: "same" }));
     const glossary = entriesOf(db, app);
@@ -149,12 +168,12 @@ export function createEngine(db: Db, chat: Chat, cfg: Pick<Config, "llm" | "sour
       const terms = termsHash(entries, to);
       const row = lookup.get(app, hash, from, to) as Row | undefined;
       // A model's translation made under other glossary entries is stale; a person's or an import never is.
-      if (row && (row.origin !== "model" || row.terms === terms)) {
+      if (row && (row.origin !== "model" || row.reviewed || (row.terms === terms && (row.model === `${channel}:${model}` || (channel === "remote" && row.model === model))))) {
         touch.run(app, hash, from, to);
         hits++;
         return void (results[n] = { text: row.text, source: row.origin === "human" ? "human" : "memory" });
       }
-      const key = `${app}\u0000${hash}\u0000${from}\u0000${to}\u0000${terms}`;
+      const key = `${app}\u0000${hash}\u0000${from}\u0000${to}\u0000${terms}\u0000${channel}\u0000${model}`;
       let promise = inflight.get(key);
       if (!promise) {
         let done!: (t: string | null) => void;
@@ -162,7 +181,7 @@ export function createEngine(db: Db, chat: Chat, cfg: Pick<Config, "llm" | "sour
         inflight.set(key, promise);
         jobs.push({ key, item, entries, terms, done });
       }
-      waits.push({ n, promise, fallback: row?.text ?? text });
+      waits.push({ n, promise, fallback: text });
     });
     count(app, to, "hits", hits);
     if (jobs.length) void make(app, jobs, from, to, opts).catch(() => jobs.forEach((j) => j.done(null)));
@@ -191,11 +210,12 @@ export function createEngine(db: Db, chat: Chat, cfg: Pick<Config, "llm" | "sour
   /** One fixed text to the model, kept nowhere: tells whether the model answers now (the stats follow). */
   async function probe(to: string): Promise<{ ok: boolean; error?: string }> {
     const failedBefore = stats.failedCalls;
-    const [t] = await ask([{ text: "Open", entries: [] }], cfg.sourceLang, to, cfg.llm.model);
+    const channel = channels().default;
+    const [t] = await ask([{ text: "Open", entries: [] }], cfg.sourceLang, to, channel === "local" ? cfg.local!.model : cfg.llm.model, channel);
     return t != null ? { ok: true } : { ok: false, error: stats.failedCalls > failedBefore ? stats.lastError.slice(0, 200) : "an answer without usable JSON" };
   }
 
-  return { translate, setHuman, importOne, probe, stats, pending: () => inflight.size };
+  return { translate, setHuman, importOne, probe, channels, setDefaultChannel, stats, pending: () => inflight.size };
 }
 
 export type Engine = ReturnType<typeof createEngine>;

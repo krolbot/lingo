@@ -23,7 +23,7 @@ export interface ClientOptions {
 
 export interface Client {
   /** Translations in the same order as the texts; the source text where there is none (yet). */
-  translate(texts: Array<string | ClientItem>, to: string, opts?: { from?: string; wait?: number }): Promise<string[]>;
+  translate(texts: Array<string | ClientItem>, to: string, opts?: { from?: string; wait?: number; channel?: "remote" | "local" }): Promise<string[]>;
   /** The supported languages (cached). */
   languages(): Promise<string[]>;
 }
@@ -34,14 +34,15 @@ export function createClient(o: ClientOptions): Client {
   const cache = new Map<string, { text: string; until: number }>();
   const ttl = o.cacheMs ?? 10 * 60_000;
   let langs: { list: string[]; until: number } | null = null;
-  const keyOf = (to: string, from: string, t: string) => `${from}\u0000${to}\u0000${t}`;
+  const keyOf = (to: string, from: string, channel: string, t: string) => `${from}\u0000${to}\u0000${channel}\u0000${t}`;
 
   return {
     async translate(texts, to, opts = {}) {
       const items = texts.map((t) => (typeof t === "string" ? { text: t } : t));
       const from = opts.from ?? "";
       const now = Date.now();
-      const out = items.map((i) => cache.get(keyOf(to, from, i.text)));
+      // The server's default channel can change at any time; only explicit choices are cached here.
+      const out = items.map((i) => opts.channel ? cache.get(keyOf(to, from, opts.channel, i.text)) : undefined);
       const todo = items.map((i, n) => ({ i, n })).filter(({ n }) => !out[n] || out[n]!.until < now);
       if (todo.length) {
         // lingo takes 100 texts a call.
@@ -51,7 +52,7 @@ export function createClient(o: ClientOptions): Client {
             const res = await f(`${base}/v1/translate`, {
               method: "POST",
               headers: { "content-type": "application/json", authorization: `Bearer ${o.token}` },
-              body: JSON.stringify({ to, ...(opts.from ? { from: opts.from } : {}), texts: part.map((p) => p.i), wait: opts.wait ?? Math.max(0, (o.timeoutMs ?? 8000) - 1000) }),
+              body: JSON.stringify({ to, ...(opts.from ? { from: opts.from } : {}), ...(opts.channel ? { channel: opts.channel } : {}), texts: part.map((p) => p.i), wait: opts.wait ?? Math.max(0, (o.timeoutMs ?? 8000) - 1000) }),
               signal: AbortSignal.timeout(o.timeoutMs ?? 8000),
             });
             if (!res.ok) continue;
@@ -62,7 +63,7 @@ export function createClient(o: ClientOptions): Client {
               // Pending or untranslated: show it now, ask again next time.
               const final = !t.pending && t.source !== "original";
               const entry = { text: t.text, until: final ? now + ttl : 0 };
-              if (final) cache.set(keyOf(to, from, p.i.text), entry);
+              if (final && opts.channel) cache.set(keyOf(to, from, opts.channel, p.i.text), entry);
               out[p.n] = entry;
             });
           } catch {

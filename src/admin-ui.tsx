@@ -8,7 +8,7 @@ import "@gravity-ui/uikit/styles/fonts.css";
 import "@gravity-ui/uikit/styles/styles.css";
 
 const base = new URL("./", window.location.href);
-const section = ["review", "memory", "glossary"].includes(window.location.pathname.split("/").at(-1) ?? "")
+const section = ["review", "memory", "glossary", "channels"].includes(window.location.pathname.split("/").at(-1) ?? "")
   ? window.location.pathname.split("/").at(-1)! : "overview";
 const url = (path: string) => new URL(path, base).toString();
 const query = new URLSearchParams(window.location.search);
@@ -17,7 +17,7 @@ type Row = { app: string; hash: string; from_lang: string; lang: string; source:
 type OverviewRow = { app: string; lang: string; n: number; human: number; waiting: number; usage: { hits: number; made: number; failed: number } | null };
 type GlossaryEntry = { term: string; rule: string; to: Record<string, string>; note: string };
 type Options = { apps: string[]; langs: string[] };
-type Data = { rows?: Row[] | OverviewRow[]; total?: number; entries?: GlossaryEntry[] };
+type Data = { rows?: Row[] | OverviewRow[]; total?: number; entries?: GlossaryEntry[]; available?: Array<"remote" | "local">; default?: "remote" | "local" };
 
 async function read<T>(path: string): Promise<T> {
   const response = await fetch(url(path), { headers: { Accept: "application/json" } });
@@ -172,6 +172,58 @@ function Glossary({ entries, options, onAction }: { entries: GlossaryEntry[]; op
   </Flex>;
 }
 
+function Channels({ data, options, onSaved }: { data: Data; options: Options; onSaved: () => void }) {
+  const available = data.available ?? ["remote"];
+  const [defaultChannel, setDefaultChannel] = useState(data.default ?? "remote");
+  const [channel, setChannel] = useState(data.default ?? "remote");
+  const [app, setApp] = useState(options.apps[0] ?? "");
+  const [to, setTo] = useState(options.langs[0] ?? "");
+  const [text, setText] = useState("");
+  const [result, setResult] = useState<{ text: string; source: string; pending: boolean } | null>(null);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  async function send(path: string, payload: object) {
+    setBusy(true);
+    setError("");
+    try {
+      const response = await fetch(url(path), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
+      if (response.status === 401) { window.location.reload(); return; }
+      if (!response.ok) throw new Error(`Не удалось выполнить действие (HTTP ${response.status})`);
+      if (path === "api/channels") onSaved();
+      else setResult((await response.json() as { translation: { text: string; source: string; pending: boolean } }).translation);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Ошибка запроса"); }
+    finally { setBusy(false); }
+  }
+  const choices = available.map((value) => ({ value, content: value === "local" ? "Локальная модель · Hy-MT2-7B Q4" : "Внешняя модель" }));
+  return <Flex direction="column" gap="spacing-5">
+    <Text variant="header-1" as="h1">Каналы перевода</Text>
+    <Text color="secondary">Выбор по умолчанию действует для API-запросов без поля channel. Указанный в запросе канал имеет приоритет. Готовый перевод из памяти, исправленный вручную, повторно не переводится.</Text>
+    <Card><Box padding="spacing-4"><Flex direction="column" gap="spacing-3">
+      <Text variant="subheader-2">Канал по умолчанию</Text>
+      <Select label="Канал" options={choices} value={[defaultChannel]} onUpdate={(v) => setDefaultChannel(v[0] as "remote" | "local")} />
+      <Box><Button view="action" loading={busy} disabled={defaultChannel === data.default} onClick={() => void send("api/channels", { channel: defaultChannel })}>Сохранить</Button></Box>
+    </Flex></Box></Card>
+    <Text variant="subheader-2">Перевести текст</Text>
+    {options.apps.length === 0 ? <Alert message="Сначала создайте токен приложения через CLI — переводы хранятся отдельно для каждого приложения" /> :
+      <form onSubmit={(event) => { event.preventDefault(); setResult(null); void send("api/translate", { app, to, text, channel }); }}>
+        <Flex direction="column" gap="spacing-3">
+          <Flex wrap="wrap" gap="spacing-2">
+            <Select label="Приложение" options={options.apps.map((value) => ({ value, content: value }))} value={[app]} onUpdate={(v) => setApp(v[0] ?? "")} />
+            <Select label="Язык" options={options.langs.map((value) => ({ value, content: value }))} value={[to]} onUpdate={(v) => setTo(v[0] ?? "")} />
+            <Select label="Канал перевода" options={choices} value={[channel]} onUpdate={(v) => setChannel(v[0] as "remote" | "local")} />
+          </Flex>
+          <TextArea value={text} onUpdate={setText} minRows={3} maxRows={8} controlProps={{ "aria-label": "Исходный текст", maxLength: 6000 }} />
+          <Box><Button type="submit" view="action" loading={busy} disabled={!text.trim()}>Перевести</Button></Box>
+        </Flex>
+      </form>}
+    {error && <Alert theme="danger" message={error} />}
+    {result && <Card><Box padding="spacing-4"><Flex direction="column" gap="spacing-2">
+      <Text variant="subheader-2" wordBreak="break-word">{result.text}</Text>
+      <Text color="secondary">{result.pending ? "Перевод ещё выполняется. Повторите запрос позже" : result.source === "memory" ? "Из памяти переводов" : result.source === "model" ? "Переведено моделью" : "Исходный текст без перевода"}</Text>
+    </Flex></Box></Card>}
+  </Flex>;
+}
+
 function App() {
   const [state, setState] = useState<"loading" | "login" | "ready" | "error">("loading");
   const [data, setData] = useState<Data>({});
@@ -201,9 +253,10 @@ function App() {
             <Tab value="review" href={url("review")}>Проверка</Tab>
             <Tab value="memory" href={url("memory")}>Память</Tab>
             <Tab value="glossary" href={url("glossary")}>Глоссарий</Tab>
+            <Tab value="channels" href={url("channels")}>Каналы</Tab>
           </TabList>
         </TabProvider>
-        {section === "overview" ? <Overview rows={data.rows as OverviewRow[] ?? []} /> : section === "glossary" ? <Glossary entries={data.entries ?? []} options={options} onAction={action} /> : <Translations rows={data.rows as Row[] ?? []} total={data.total} options={options} onAction={action} />}
+        {section === "overview" ? <Overview rows={data.rows as OverviewRow[] ?? []} /> : section === "glossary" ? <Glossary entries={data.entries ?? []} options={options} onAction={action} /> : section === "channels" ? <Channels key={data.default} data={data} options={options} onSaved={() => setRevision((current) => current + 1)} /> : <Translations rows={data.rows as Row[] ?? []} total={data.total} options={options} onAction={action} />}
       </Flex>}
   </Container></Provider>;
 }

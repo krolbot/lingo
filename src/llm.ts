@@ -11,9 +11,13 @@ export interface Message {
 }
 export type Chat = (model: string, messages: Message[]) => Promise<string>;
 
-export function openAiChat(llm: Config["llm"], f: typeof fetch = fetch): Chat {
+export function openAiChat(llm: Config["llm"], f: typeof fetch = fetch, local = false): Chat {
   return async (model, messages) => {
-    const body: Record<string, unknown> = { model, messages };
+    const body: Record<string, unknown> = {
+      model,
+      messages: local ? [{ role: "user", content: `${messages[0]?.content}\n\n${messages[1]?.content}` }] : messages,
+      ...(local ? { temperature: 0.7, top_p: 0.6, top_k: 20, repeat_penalty: 1.05, max_tokens: 4096 } : {}),
+    };
     if (llm.responseFormat === "json_object") body.response_format = { type: "json_object" };
     if (llm.responseFormat === "json_schema")
       body.response_format = { type: "json_schema", json_schema: { name: "translations", strict: true, schema: { type: "object", properties: { translations: { type: "array", items: { type: "string" } } }, required: ["translations"], additionalProperties: false } } };

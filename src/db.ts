@@ -58,6 +58,7 @@ const MIGRATIONS = [
      body   TEXT NOT NULL             -- the JSON answer
    );
    CREATE UNIQUE INDEX ops_actions_key ON ops_actions (key) WHERE key IS NOT NULL`,
+  `CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
 ];
 
 export type Db = DatabaseSync;

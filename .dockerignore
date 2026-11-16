@@ -6,6 +6,7 @@ dist
 *.db
 *.db-*
 data
+models
 .DS_Store
 docs
 README.md

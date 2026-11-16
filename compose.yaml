@@ -8,14 +8,31 @@ services:
       HOST: 0.0.0.0
       PORT: 8790
       LINGO_DB: /data/lingo.db
+      LINGO_LOCAL_LLM_URL: http://lingo-llm:8080/v1
+      LINGO_LOCAL_MODEL: hy-mt2-7b
+      LINGO_LOCAL_LLM_TIMEOUT_MS: "180000"
     networks:
       - caddy
+      - lingo-internal
     volumes:
       - lingo-data:/data
+
+  lingo-llm:
+    image: ghcr.io/ggml-org/llama.cpp:server-b12429
+    restart: unless-stopped
+    mem_limit: 12g
+    cpus: 16
+    command: ["-m", "/models/Hy-MT2-7B-Q4_K_M.gguf", "-a", "hy-mt2-7b", "--host", "0.0.0.0", "--port", "8080", "-c", "4096", "-ngl", "0", "-t", "16", "--parallel", "1"]
+    volumes:
+      - ./models:/models:ro
+    networks:
+      - lingo-internal
 
 volumes:
   lingo-data:
 
 networks:
+  lingo-internal:
+    internal: true
   caddy:
     external: true

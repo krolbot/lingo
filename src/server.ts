@@ -3,7 +3,7 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import { buildAdmin } from "./admin.ts";
 import { loadConfig, type Config } from "./config.ts";
 import { openDb, type Db } from "./db.ts";
-import { createEngine, type Engine, type Item } from "./engine.ts";
+import { createEngine, type Channel, type Engine, type Item } from "./engine.ts";
 import { entriesOf, loadGlossaryFile, setEntries, validEntries, type Entry } from "./glossary.ts";
 import { normalize } from "./lang.ts";
 import { openAiChat, type Chat } from "./llm.ts";
@@ -14,7 +14,7 @@ const MAX_ITEMS = 100, MAX_TEXT = 6000, MAX_WAIT = 120_000, MAX_CONTEXT = 500, M
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 
 export function buildApp(cfg: Config, db: Db, chat: Chat = openAiChat(cfg.llm)): { app: FastifyInstance; engine: Engine } {
-  const engine = createEngine(db, chat, cfg);
+  const engine = createEngine(db, chat, cfg, cfg.local ? openAiChat(cfg.local, fetch, true) : undefined);
   const app = Fastify({ logger: true, bodyLimit: 2 * 1024 * 1024 });
   let requests = 0;
 
@@ -30,6 +30,14 @@ export function buildApp(cfg: Config, db: Db, chat: Chat = openAiChat(cfg.llm)):
     if (!n) reply.code(400).send({ error: `unsupported language ${String(tag)}; supported: ${cfg.langs.join(", ")}` });
     return n;
   };
+  const channel = (value: unknown, reply: FastifyReply): Channel | undefined => {
+    if (value === undefined) return undefined;
+    if ((value !== "remote" && value !== "local") || !engine.channels().available.includes(value)) {
+      reply.code(400).send({ error: "unsupported translation channel" });
+      return undefined;
+    }
+    return value;
+  };
 
   app.get("/healthz", async () => ({ ok: true }));
   app.get("/v1/languages", async () => ({ languages: cfg.langs, source: cfg.sourceLang }));
@@ -43,9 +51,12 @@ export function buildApp(cfg: Config, db: Db, chat: Chat = openAiChat(cfg.llm)):
     requests++;
   });
   const who = (req: FastifyRequest) => (req as FastifyRequest & { app: string }).app;
+  app.get("/v1/channels", async () => engine.channels());
 
-  app.post<{ Body: { to?: string; from?: string; texts?: Array<string | Item>; wait?: number } }>("/v1/translate", async (req, reply) => {
+  app.post<{ Body: { to?: string; from?: string; texts?: Array<string | Item>; wait?: number; channel?: Channel } }>("/v1/translate", async (req, reply) => {
     const b = req.body ?? {};
+    const selected = channel(b.channel, reply);
+    if (b.channel !== undefined && !selected) return;
     const to = lang(b.to, reply);
     if (!to) return;
     const from = b.from === undefined ? cfg.sourceLang : lang(b.from, reply);
@@ -59,11 +70,14 @@ export function buildApp(cfg: Config, db: Db, chat: Chat = openAiChat(cfg.llm)):
     const items: Item[] = b.texts.map((t) => (typeof t === "string" ? { text: t } : t));
     if (items.some((i) => i.text.length > MAX_TEXT || (i.context?.length ?? 0) > MAX_CONTEXT)) return reply.code(400).send({ error: `text or context is too long (limits: ${MAX_TEXT}, ${MAX_CONTEXT})` });
     const wait = Math.min(Math.max(Number(b.wait ?? 10_000) || 0, 0), MAX_WAIT);
-    return { translations: await engine.translate(who(req), items, to, { from, wait }) };
+    const effective = selected ?? engine.channels().default;
+    return { channel: effective, translations: await engine.translate(who(req), items, to, { from, wait, channel: effective }) };
   });
 
-  app.post<{ Body: { to?: string[]; from?: string; entries?: Record<string, string>; context?: string } }>("/v1/catalog", async (req, reply) => {
+  app.post<{ Body: { to?: string[]; from?: string; entries?: Record<string, string>; context?: string; channel?: Channel } }>("/v1/catalog", async (req, reply) => {
     const b = req.body ?? {};
+    const selected = channel(b.channel, reply);
+    if (b.channel !== undefined && !selected) return;
     if (!Array.isArray(b.to) || b.to.length < 1 || b.to.length > MAX_CATALOG_LANGS || !b.entries || typeof b.entries !== "object" || Array.isArray(b.entries)) return reply.code(400).send({ error: `to: [up to ${MAX_CATALOG_LANGS} languages], entries: {key: text}` });
     const keys = Object.keys(b.entries);
     if (keys.length > MAX_ITEMS || keys.some((k) => !k || k.length > MAX_CONTEXT || typeof b.entries![k] !== "string" || b.entries![k].length > MAX_TEXT) ||
@@ -81,14 +95,15 @@ export function buildApp(cfg: Config, db: Db, chat: Chat = openAiChat(cfg.llm)):
 
     // The key says what a short label is for ("panel_open_url": a link that opens something, not "unresolved").
     const items = keys.map((k) => ({ text: b.entries![k]!, context: `${b.context ? `${b.context}; ` : ""}key: ${k}` }));
+    const effective = selected ?? engine.channels().default;
     const out: Record<string, Record<string, string>> = {};
     const missing: Record<string, string[]> = {};
     for (const to of tos) {
-      const r = await engine.translate(who(req), items, to, { from, catalog: true });
+      const r = await engine.translate(who(req), items, to, { from, catalog: true, channel: effective });
       out[to] = Object.fromEntries(keys.map((k, n) => [k, r[n]!.text]));
       missing[to] = keys.filter((_, n) => r[n]!.source === "original");
     }
-    return { catalogs: out, missing };
+    return { channel: effective, catalogs: out, missing };
   });
 
   app.get("/v1/glossary", async (req) => ({ entries: entriesOf(db, who(req)) }));
@@ -129,11 +144,11 @@ async function main() {
   const cfg = loadConfig();
   const db = openDb(cfg.db);
   if (cfg.glossaryFile) loadGlossaryFile(db, cfg.glossaryFile);
-  const { app } = buildApp(cfg, db);
+  const { app, engine } = buildApp(cfg, db);
   await app.listen({ host: cfg.host, port: cfg.port });
   if (cfg.adminPort) {
     if (!cfg.adminToken) throw new Error("LINGO_ADMIN_PORT needs LINGO_ADMIN_TOKEN");
-    await buildAdmin(cfg, db).listen({ host: cfg.host, port: cfg.adminPort });
+    await buildAdmin(cfg, db, engine).listen({ host: cfg.host, port: cfg.adminPort });
   }
 }
 

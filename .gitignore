@@ -5,5 +5,6 @@ node_modules/
 *.db
 *.db-*
 data/
+models/
 dist/
 .DS_Store

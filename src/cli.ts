@@ -17,7 +17,7 @@ On the machine lingo runs on (reads LINGO_DB and the rest from the environment /
                                              translations made elsewhere, one {"hash"|"source", "text"} per line
 
 From anywhere, against a running lingo (LINGO_URL, LINGO_TOKEN):
-  catalog <en.json> --to <lang,lang> --out <dir> [--context <text>]
+  catalog <en.json> --to <lang,lang> --out <dir> [--context <text>] [--channel remote|local]
                                              a flat {key: text} file into <dir>/<lang>.json for each language`;
 
 const args = process.argv.slice(2);
@@ -35,6 +35,8 @@ async function main() {
     const entries: unknown = JSON.parse(readFileSync(sub!, "utf8"));
     if (!entries || typeof entries !== "object" || Array.isArray(entries) || Object.entries(entries).some(([k, v]) => !k || typeof v !== "string")) throw new Error("catalog must be a flat {key: text} object");
     const languages = need("to").split(",").map((s) => s.trim()).filter(Boolean);
+    const channel = flag("channel");
+    if (channel && channel !== "remote" && channel !== "local") throw new Error("--channel must be remote or local");
     const keys = Object.keys(entries);
     const catalogs: Record<string, Record<string, string>> = {};
     const missing: Record<string, string[]> = {};
@@ -45,7 +47,7 @@ async function main() {
         const res = await fetch(`${url.replace(/\/+$/, "")}/v1/catalog`, {
           method: "POST",
           headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-          body: JSON.stringify({ to, entries: Object.fromEntries(part.map((k) => [k, (entries as Record<string, string>)[k]])), context: flag("context") }),
+          body: JSON.stringify({ to, entries: Object.fromEntries(part.map((k) => [k, (entries as Record<string, string>)[k]])), context: flag("context"), ...(channel ? { channel } : {}) }),
           signal: AbortSignal.timeout(30 * 60_000),
         });
         if (!res.ok) throw new Error(`catalog HTTP ${res.status}: ${await res.text()}`);
