@@ -7,13 +7,14 @@ import { createEngine, type Channel, type Engine, type Item } from "./engine.ts"
 import { entriesOf, loadGlossaryFile, setEntries, validEntries, type Entry } from "./glossary.ts";
 import { normalize } from "./lang.ts";
 import { openAiChat, type Chat } from "./llm.ts";
+import { LocalModel } from "./local-model.ts";
 import { registerOps } from "./ops.ts";
 
 const MAX_ITEMS = 100, MAX_TEXT = 6000, MAX_WAIT = 120_000, MAX_CONTEXT = 500, MAX_CATALOG_LANGS = 10;
 
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 
-export function buildApp(cfg: Config, db: Db, chat: Chat = openAiChat(cfg.llm)): { app: FastifyInstance; engine: Engine } {
+export function buildApp(cfg: Config, db: Db, modelManager?: LocalModel, chat: Chat = openAiChat(cfg.llm)): { app: FastifyInstance; engine: Engine } {
   const engine = createEngine(db, chat, cfg, cfg.local ? openAiChat(cfg.local, fetch, true) : undefined);
   const app = Fastify({ logger: true, bodyLimit: 2 * 1024 * 1024 });
   let requests = 0;
@@ -36,6 +37,10 @@ export function buildApp(cfg: Config, db: Db, chat: Chat = openAiChat(cfg.llm)):
       reply.code(400).send({ error: "unsupported translation channel" });
       return undefined;
     }
+    if (value === "local" && !modelManager?.ready) {
+      reply.code(503).send({ error: "local model is not ready; download it in the admin panel" });
+      return undefined;
+    }
     return value;
   };
 
@@ -51,7 +56,7 @@ export function buildApp(cfg: Config, db: Db, chat: Chat = openAiChat(cfg.llm)):
     requests++;
   });
   const who = (req: FastifyRequest) => (req as FastifyRequest & { app: string }).app;
-  app.get("/v1/channels", async () => engine.channels());
+  app.get("/v1/channels", async () => ({ ...engine.channels(), model: modelManager?.status() ?? null }));
 
   app.post<{ Body: { to?: string; from?: string; texts?: Array<string | Item>; wait?: number; channel?: Channel } }>("/v1/translate", async (req, reply) => {
     const b = req.body ?? {};
@@ -71,6 +76,7 @@ export function buildApp(cfg: Config, db: Db, chat: Chat = openAiChat(cfg.llm)):
     if (items.some((i) => i.text.length > MAX_TEXT || (i.context?.length ?? 0) > MAX_CONTEXT)) return reply.code(400).send({ error: `text or context is too long (limits: ${MAX_TEXT}, ${MAX_CONTEXT})` });
     const wait = Math.min(Math.max(Number(b.wait ?? 10_000) || 0, 0), MAX_WAIT);
     const effective = selected ?? engine.channels().default;
+    if (effective === "local" && !modelManager?.ready) return reply.code(503).send({ error: "local model is not ready; download it in the admin panel" });
     return { channel: effective, translations: await engine.translate(who(req), items, to, { from, wait, channel: effective }) };
   });
 
@@ -96,6 +102,7 @@ export function buildApp(cfg: Config, db: Db, chat: Chat = openAiChat(cfg.llm)):
     // The key says what a short label is for ("panel_open_url": a link that opens something, not "unresolved").
     const items = keys.map((k) => ({ text: b.entries![k]!, context: `${b.context ? `${b.context}; ` : ""}key: ${k}` }));
     const effective = selected ?? engine.channels().default;
+    if (effective === "local" && !modelManager?.ready) return reply.code(503).send({ error: "local model is not ready; download it in the admin panel" });
     const out: Record<string, Record<string, string>> = {};
     const missing: Record<string, string[]> = {};
     for (const to of tos) {
@@ -144,12 +151,24 @@ async function main() {
   const cfg = loadConfig();
   const db = openDb(cfg.db);
   if (cfg.glossaryFile) loadGlossaryFile(db, cfg.glossaryFile);
-  const { app, engine } = buildApp(cfg, db);
+  const model = cfg.localModelDir && cfg.local ? new LocalModel(cfg.localModelDir, cfg.local.model) : undefined;
+  // The remote channel must serve while the local GGUF is being verified and loaded.
+  const initializing = model?.initialize();
+  const { app, engine } = buildApp(cfg, db, model);
   await app.listen({ host: cfg.host, port: cfg.port });
+  let admin: FastifyInstance | undefined;
   if (cfg.adminPort) {
     if (!cfg.adminToken) throw new Error("LINGO_ADMIN_PORT needs LINGO_ADMIN_TOKEN");
-    await buildAdmin(cfg, db, engine).listen({ host: cfg.host, port: cfg.adminPort });
+    admin = buildAdmin(cfg, db, engine, model);
+    await admin.listen({ host: cfg.host, port: cfg.adminPort });
   }
+  process.once("SIGTERM", () => { void (async () => {
+    await model?.stop();
+    await initializing;
+    await admin?.close();
+    await app.close();
+    db.close();
+  })().catch((err) => { console.error(err); process.exitCode = 1; }); });
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) main().catch((err) => {

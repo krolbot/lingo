@@ -6,10 +6,11 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import type { Config } from "./config.ts";
 import type { Db } from "./db.ts";
 import type { Channel, Engine } from "./engine.ts";
+import type { LocalModel } from "./local-model.ts";
 import { setEntries, type Entry } from "./glossary.ts";
 
 /** The admin API is separate from the translation API; the browser bundle is public, data is not. */
-export function buildAdmin(cfg: Config, db: Db, engine: Engine): FastifyInstance {
+export function buildAdmin(cfg: Config, db: Db, engine: Engine, model?: LocalModel): FastifyInstance {
   const app = Fastify({ logger: false });
   const index = readFileSync(fileURLToPath(new URL("../dist/admin/index.html", import.meta.url)), "utf8");
   const assets = new URL("../dist/admin/assets/", import.meta.url);
@@ -56,12 +57,26 @@ export function buildAdmin(cfg: Config, db: Db, engine: Engine): FastifyInstance
   for (const path of ["/", "/review", "/memory", "/glossary", "/channels"]) app.get(path, async (_req, reply) => reply.type("text/html").send(index));
   const apps = () => (db.prepare("SELECT DISTINCT app FROM memory UNION SELECT DISTINCT app FROM tokens ORDER BY 1").all() as Array<{ app: string }>).map((r) => r.app);
   app.get("/api/options", async () => ({ apps: apps(), langs: cfg.langs.filter((l) => l !== cfg.sourceLang) }));
-  app.get("/api/channels", async () => engine.channels());
+  app.get("/api/channels", async () => ({ ...engine.channels(), model: model?.status() ?? null }));
+  const jsonAction = (req: FastifyRequest) => req.headers["content-type"]?.split(";")[0]?.trim().toLowerCase() === "application/json";
+  app.post("/api/model/download", async (req, reply) => {
+    if (!jsonAction(req)) return reply.code(415).send({ error: "JSON content type is required" });
+    if (!model) return reply.code(404).send({ error: "local model is not configured" });
+    if (!model.startDownload()) return reply.code(409).send({ error: "model already installed or downloading" });
+    return reply.code(202).send(model.status());
+  });
+  app.post("/api/model/start", async (req, reply) => {
+    if (!jsonAction(req)) return reply.code(415).send({ error: "JSON content type is required" });
+    if (!model) return reply.code(404).send({ error: "local model is not configured" });
+    if (!model.start()) return reply.code(409).send({ error: "model is already running or has not been downloaded" });
+    return reply.code(202).send(model.status());
+  });
   app.post<{ Body: { channel?: Channel } }>("/api/channels", async (req, reply) => {
     const selected = req.body?.channel;
     if (selected !== "remote" && selected !== "local" || !engine.channels().available.includes(selected)) return reply.code(400).send({ error: "channel is unavailable" });
+    if (selected === "local" && !model?.ready) return reply.code(503).send({ error: "local model is not ready" });
     engine.setDefaultChannel(selected);
-    return engine.channels();
+    return { ...engine.channels(), model: model?.status() ?? null };
   });
   app.post<{ Body: { app?: string; to?: string; text?: string; channel?: Channel } }>("/api/translate", async (req, reply) => {
     const { app: scope, to, text, channel } = req.body ?? {};
@@ -70,6 +85,7 @@ export function buildAdmin(cfg: Config, db: Db, engine: Engine): FastifyInstance
       (channel !== "remote" && channel !== "local") || !engine.channels().available.includes(channel)) {
       return reply.code(400).send({ error: "app, language, text and an available channel are required" });
     }
+    if (channel === "local" && !model?.ready) return reply.code(503).send({ error: "local model is not ready" });
     const [translation] = await engine.translate(scope, [{ text }], to, { channel, wait: 120_000 });
     return { channel, translation };
   });

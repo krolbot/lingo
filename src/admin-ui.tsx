@@ -17,7 +17,8 @@ type Row = { app: string; hash: string; from_lang: string; lang: string; source:
 type OverviewRow = { app: string; lang: string; n: number; human: number; waiting: number; usage: { hits: number; made: number; failed: number } | null };
 type GlossaryEntry = { term: string; rule: string; to: Record<string, string>; note: string };
 type Options = { apps: string[]; langs: string[] };
-type Data = { rows?: Row[] | OverviewRow[]; total?: number; entries?: GlossaryEntry[]; available?: Array<"remote" | "local">; default?: "remote" | "local" };
+type ModelStatus = { state: "not_installed" | "downloading" | "verifying" | "starting" | "ready" | "error"; bytes: number; total: number; error?: string };
+type Data = { rows?: Row[] | OverviewRow[]; total?: number; entries?: GlossaryEntry[]; available?: Array<"remote" | "local">; default?: "remote" | "local"; model?: ModelStatus | null };
 
 async function read<T>(path: string): Promise<T> {
   const response = await fetch(url(path), { headers: { Accept: "application/json" } });
@@ -174,6 +175,7 @@ function Glossary({ entries, options, onAction }: { entries: GlossaryEntry[]; op
 
 function Channels({ data, options, onSaved }: { data: Data; options: Options; onSaved: () => void }) {
   const available = data.available ?? ["remote"];
+  const [model, setModel] = useState(data.model);
   const [defaultChannel, setDefaultChannel] = useState(data.default ?? "remote");
   const [channel, setChannel] = useState(data.default ?? "remote");
   const [app, setApp] = useState(options.apps[0] ?? "");
@@ -182,6 +184,26 @@ function Channels({ data, options, onSaved }: { data: Data; options: Options; on
   const [result, setResult] = useState<{ text: string; source: string; pending: boolean } | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (!model || (model.state !== "downloading" && model.state !== "verifying" && model.state !== "starting")) return;
+    const timer = window.setInterval(() => {
+      void read<Data>("api/channels").then((fresh) => setModel(fresh.model)).catch((cause) => {
+        if (cause instanceof Response && cause.status === 401) window.location.reload();
+      });
+    }, 1500);
+    return () => window.clearInterval(timer);
+  }, [model?.state]);
+  async function modelAction(path: "download" | "start") {
+    setBusy(true);
+    setError("");
+    try {
+      const response = await fetch(url(`api/model/${path}`), { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+      if (response.status === 401) { window.location.reload(); return; }
+      if (!response.ok) throw new Error(`Не удалось начать загрузку (HTTP ${response.status})`);
+      setModel(await response.json() as ModelStatus);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Не удалось начать загрузку"); }
+    finally { setBusy(false); }
+  }
   async function send(path: string, payload: object) {
     setBusy(true);
     setError("");
@@ -194,10 +216,20 @@ function Channels({ data, options, onSaved }: { data: Data; options: Options; on
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Ошибка запроса"); }
     finally { setBusy(false); }
   }
-  const choices = available.map((value) => ({ value, content: value === "local" ? "Локальная модель · Hy-MT2-7B Q4" : "Внешняя модель" }));
+  const choices = available.map((value) => ({ value, content: value === "local" ? "Локальная модель · Hy-MT2-7B Q4" : "Внешняя модель", disabled: value === "local" && model?.state !== "ready" }));
   return <Flex direction="column" gap="spacing-5">
     <Text variant="header-1" as="h1">Каналы перевода</Text>
     <Text color="secondary">Выбор по умолчанию действует для API-запросов без поля channel. Указанный в запросе канал имеет приоритет. Готовый перевод из памяти, исправленный вручную, повторно не переводится.</Text>
+    <Card><Box padding="spacing-4"><Flex direction="column" gap="spacing-3">
+      <Text variant="subheader-2">Локальная модель Hy-MT2-7B Q4</Text>
+      <Text>{!model ? "Локальная модель не настроена" : model.state === "not_installed" ? "Не загружена" : model.state === "downloading" ? `Загрузка: ${new Intl.NumberFormat("ru").format(model.bytes)} из ${new Intl.NumberFormat("ru").format(model.total)} байт (${Math.floor(100 * model.bytes / model.total)} %)` : model.state === "verifying" ? "Проверка SHA-256" : model.state === "starting" ? "Запуск модели" : model.state === "ready" ? "Готова к переводу" : "Ошибка загрузки или запуска"}</Text>
+      {model?.state === "error" && model.error && <Alert theme="danger" message={`Ошибка модели: ${model.error}`} />}
+      {model && (model.state === "not_installed" || model.state === "error") && <Flex gap="spacing-2" wrap="wrap">
+        {model.state === "error" && <Button loading={busy} onClick={() => void modelAction("start")}>Повторить запуск</Button>}
+        <Button view="action" loading={busy} onClick={() => void modelAction("download")}>{model.state === "error" ? "Скачать заново" : "Скачать модель"}</Button>
+      </Flex>}
+      <Text color="secondary">Модель загружается после запуска приложения в отдельный постоянный том, а не в образ контейнера.</Text>
+    </Flex></Box></Card>
     <Card><Box padding="spacing-4"><Flex direction="column" gap="spacing-3">
       <Text variant="subheader-2">Канал по умолчанию</Text>
       <Select label="Канал" options={choices} value={[defaultChannel]} onUpdate={(v) => setDefaultChannel(v[0] as "remote" | "local")} />

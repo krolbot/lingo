@@ -21,8 +21,9 @@ export interface Config {
     responseFormat: string;
     timeoutMs: number;
   };
-  /** Optional local OpenAI-compatible model server, reachable from the application container. */
+  /** Local llama.cpp server bound to the same container's loopback interface. */
   local?: Config["llm"];
+  localModelDir?: string;
   /** A JSON file with the global glossary, read at start-up (entries the API cannot change). */
   glossaryFile?: string;
   /** The admin pages' port and bearer/form sign-in token; no port, no admin pages. */
@@ -79,9 +80,9 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
       responseFormat: env.LINGO_RESPONSE_FORMAT ?? "",
       timeoutMs: Number(env.LINGO_LLM_TIMEOUT_MS ?? 60_000),
     },
-    ...(env.LINGO_LOCAL_LLM_URL ? { local: {
-      url: env.LINGO_LOCAL_LLM_URL.replace(/\/+$/, ""),
-      key: env.LINGO_LOCAL_LLM_KEY ?? "",
+    ...(env.LINGO_LOCAL_MODEL_DIR ? { localModelDir: env.LINGO_LOCAL_MODEL_DIR, local: {
+      url: "http://127.0.0.1:8080/v1",
+      key: "",
       model: env.LINGO_LOCAL_MODEL ?? "hy-mt2-7b",
       catalogModel: env.LINGO_LOCAL_MODEL ?? "hy-mt2-7b",
       responseFormat: "json_schema",
