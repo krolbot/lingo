@@ -98,7 +98,8 @@ manifest, and `LINGO_PROVIDERS` the companies it runs on (`hosting:self`, or e.g
 
 ## Admin pages
 
-With `LINGO_ADMIN_PORT` and `LINGO_ADMIN_TOKEN`, a second port serves unstyled HTML pages for people:
+With `LINGO_ADMIN_PORT` and `LINGO_ADMIN_TOKEN`, a second port serves a React admin app using
+the native Gravity UI UIKit components and its default theme (system light/dark):
 
 - **Overview**: per app and language, how many translations, how many a person corrected, how many
   wait for review, and today's hits, new translations and failures.
@@ -108,11 +109,15 @@ With `LINGO_ADMIN_PORT` and `LINGO_ADMIN_TOKEN`, a second port serves unstyled H
   "this translation is wrong" link from your app.
 - **Glossary**: global and per app.
 
-Every link and form is relative, so the pages work behind a proxy under any path. Opening the panel
-without a session shows a token sign-in form. Submit `LINGO_ADMIN_TOKEN` there; the server sets a
-Secure, HttpOnly, SameSite=Strict cookie. API clients can instead use `Authorization: Bearer <token>`.
+Navigation and static assets resolve relative to the mounted URL, so the app works behind a proxy
+under any path. Opening the panel without a session shows a token sign-in form. Submit
+`LINGO_ADMIN_TOKEN` there; the server sets a Secure, HttpOnly, SameSite=Strict cookie. API clients
+can instead use `Authorization: Bearer <token>`.
 Keep the admin port behind a trusted reverse proxy and an IP allowlist or equivalent network boundary.
 Do not put the token in the URL.
+
+For a source checkout, run `npm run build:admin` before starting the service with an admin port;
+Docker builds the UI bundle in a separate build stage and serves it on the same admin port.
 
 ## Client
 

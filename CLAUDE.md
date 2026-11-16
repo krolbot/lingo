@@ -3,7 +3,9 @@
 A translation service for one's own apps: memory, glossary, checks, any OpenAI-compatible model.
 README.md is the user's guide; docs/DESIGN.md the reasons.
 
-- TypeScript on Fastify, `node:sqlite` (Node 22.13+), no native modules.
+- TypeScript on Fastify, `node:sqlite` (Node 22.13+), no native modules. Admin uses React
+  and `@gravity-ui/uikit` v8 with its own fonts/styles and native layout and controls, without
+  custom component wrappers or a parallel server-rendered interface.
 - Do not add automated tests, test files, test runners, fixtures or CI test jobs to this repository.
   Verify changes with typechecking and direct checks of the running service instead.
 - This repository is public: never write hostnames, IPs, machine names, home paths, tokens or the

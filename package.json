@@ -14,14 +14,21 @@
     "start": "tsx src/server.ts",
     "dev": "tsx watch src/server.ts",
     "cli": "tsx src/cli.ts",
-    "typecheck": "tsc -p tsconfig.json"
+    "typecheck": "tsc -p tsconfig.json",
+    "build:admin": "vite build admin --base ./ --outDir ../dist/admin --emptyOutDir"
   },
   "dependencies": {
     "fastify": "^5.12.7",
     "tsx": "^4.23.15"
   },
   "devDependencies": {
+    "@gravity-ui/uikit": "8.0.0",
     "@types/node": "^22.20.5",
-    "typescript": "^5.9.3"
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "typescript": "^5.9.3",
+    "vite": "8.3.8"
   }
 }

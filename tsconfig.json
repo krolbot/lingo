@@ -1,6 +1,7 @@
 {
   "compilerOptions": {
     "target": "es2023",
+    "jsx": "react-jsx",
     "module": "nodenext",
     "moduleResolution": "nodenext",
     "allowImportingTsExtensions": true,
@@ -8,7 +9,7 @@
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "skipLibCheck": true,
-    "types": ["node"]
+    "types": ["node", "vite/client"]
   },
   "include": ["src"]
 }
