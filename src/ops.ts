@@ -81,8 +81,8 @@ const durationMs = (d: string) => {
 /** Two glossary entries mean the same. */
 const sameEntry = (a: Entry, b: Entry) => a.rule === b.rule && (a.note ?? "") === (b.note ?? "") && JSON.stringify(Object.entries(a.to ?? {}).sort()) === JSON.stringify(Object.entries(b.to ?? {}).sort());
 
-export function registerOps(app: FastifyInstance, cfg: Config, db: Db, engine: Engine, requests: () => number, now: () => number = Date.now) {
-  const started = now();
+export function registerOps(app: FastifyInstance, cfg: Config, db: Db, engine: Engine, requests: () => number) {
+  const started = Date.now();
   const same = (given: string) => {
     if (!cfg.opsToken) return false;
     const x = Buffer.from(given), y = Buffer.from(cfg.opsToken);
@@ -110,8 +110,8 @@ export function registerOps(app: FastifyInstance, cfg: Config, db: Db, engine: E
       guarded("model", () => {
         const data = { calls: s.calls, failed_calls: s.failedCalls, last_ok_at: iso(s.lastOkAt), last_error_at: iso(s.lastErrorAt) };
         if (!s.lastFailed) return { id: "model", level: "ok", detail: s.lastOkAt ? "the model answered its last call" : "no model call yet", data };
-        const fresh = now() - s.lastErrorAt < MODEL_FRESH_MS;
-        const ago = Math.round((now() - s.lastErrorAt) / 60_000);
+        const fresh = Date.now() - s.lastErrorAt < MODEL_FRESH_MS;
+        const ago = Math.round((Date.now() - s.lastErrorAt) / 60_000);
         return { id: "model", level: fresh ? "bad" : "warn", detail: `the model's last call, ${ago} min ago, failed: ${s.lastError.slice(0, 200)}`, data };
       }),
       guarded("failures", () => {
@@ -125,7 +125,7 @@ export function registerOps(app: FastifyInstance, cfg: Config, db: Db, engine: E
       }),
     ];
     const status: Level = checks.some((c) => c.level === "bad") ? "bad" : checks.some((c) => c.level === "warn") ? "warn" : "ok";
-    return { app: "lingo", version: VERSION, at: new Date(now()).toISOString(), status, checks };
+    return { app: "lingo", version: VERSION, at: new Date().toISOString(), status, checks };
   }
 
   function metrics() {
@@ -145,7 +145,7 @@ export function registerOps(app: FastifyInstance, cfg: Config, db: Db, engine: E
       "# TYPE lingo_requests_total counter",
       `lingo_requests_total ${requests()}`,
       "# TYPE lingo_uptime_seconds gauge",
-      `lingo_uptime_seconds ${Math.round((now() - started) / 1000)}`,
+      `lingo_uptime_seconds ${Math.round((Date.now() - started) / 1000)}`,
       "",
     ].join("\n");
   }

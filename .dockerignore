@@ -2,12 +2,10 @@
 .planning
 .env*
 node_modules
-coverage
 *.db
 *.db-*
 data
 .DS_Store
-test
 docs
 README.md
 CLAUDE.md

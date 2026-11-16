@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from "node:fs";
 export interface Config {
   host: string;
   port: number;
-  /** The SQLite file. ":memory:" for tests. */
+  /** The SQLite file. */
   db: string;
   /** Supported languages, BCP 47; the source language of every app is `sourceLang` unless a request says otherwise. */
   langs: string[];

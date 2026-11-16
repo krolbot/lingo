@@ -13,10 +13,9 @@ const MAX_ITEMS = 100, MAX_TEXT = 6000, MAX_WAIT = 120_000, MAX_CONTEXT = 500, M
 
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 
-/** `now` is for tests of the checks that depend on the time. */
-export function buildApp(cfg: Config, db: Db, chat: Chat = openAiChat(cfg.llm), now: () => number = Date.now): { app: FastifyInstance; engine: Engine } {
+export function buildApp(cfg: Config, db: Db, chat: Chat = openAiChat(cfg.llm)): { app: FastifyInstance; engine: Engine } {
   const engine = createEngine(db, chat, cfg);
-  const app = Fastify({ logger: process.env.NODE_ENV !== "test" && !process.env.VITEST, bodyLimit: 2 * 1024 * 1024 });
+  const app = Fastify({ logger: true, bodyLimit: 2 * 1024 * 1024 });
   let requests = 0;
 
   /** The app a bearer token belongs to. */
@@ -121,7 +120,7 @@ export function buildApp(cfg: Config, db: Db, chat: Chat = openAiChat(cfg.llm), 
     return { rows };
   });
 
-  registerOps(app, cfg, db, engine, () => requests, now);
+  registerOps(app, cfg, db, engine, () => requests);
 
   return { app, engine };
 }
