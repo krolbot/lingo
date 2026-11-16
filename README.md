@@ -98,7 +98,7 @@ manifest, and `LINGO_PROVIDERS` the companies it runs on (`hosting:self`, or e.g
 
 ## Admin pages
 
-With `LINGO_ADMIN_PORT` and `LINGO_ADMIN_TOKEN`, a second port serves pages for people:
+With `LINGO_ADMIN_PORT` and `LINGO_ADMIN_TOKEN`, a second port serves unstyled HTML pages for people:
 
 - **Overview**: per app and language, how many translations, how many a person corrected, how many
   wait for review, and today's hits, new translations and failures.

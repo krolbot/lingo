@@ -44,6 +44,12 @@ describe("admin", () => {
     expect(valid.headers["set-cookie"]).toMatch(/lingo_admin=adm; Path=\/; Secure; HttpOnly; SameSite=Strict/);
     expect((await admin.inject({ url: "/", headers: { cookie: "lingo_admin=adm" } })).statusCode).toBe(200);
     expect((await admin.inject({ url: "/", headers: auth })).statusCode).toBe(200);
+    for (const url of ["/", "/review", "/memory", "/glossary"]) {
+      const html = (await admin.inject({ url, headers: auth })).body;
+      expect(html).not.toMatch(/<style\b|<link\b[^>]*stylesheet|\sstyle=|\sclass=/i);
+    }
+    expect(signin.body).not.toMatch(/<style\b|<link\b[^>]*stylesheet|\sstyle=|\sclass=/i);
+    expect(invalid.body).not.toMatch(/<style\b|<link\b[^>]*stylesheet|\sstyle=|\sclass=/i);
   });
 
   it("lists what waits for review, takes corrections, approvals and a request to translate again", async () => {
