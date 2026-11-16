@@ -98,16 +98,16 @@ manifest, and `LINGO_PROVIDERS` the companies it runs on (`hosting:self`, or e.g
 
 ## Admin pages
 
-With `LINGO_ADMIN_PORT` and `LINGO_ADMIN_TOKEN`, a second port serves a React admin app using
-the native Gravity UI UIKit components and its default theme (system light/dark):
+With `LINGO_ADMIN_PORT` and `LINGO_ADMIN_TOKEN`, a second port serves a Russian-language React
+admin app using native Gravity UI UIKit components and its default theme (system light/dark):
 
-- **Overview**: per app and language, how many translations, how many a person corrected, how many
+- **Сводка**: per app and language, how many translations, how many a person corrected, how many
   wait for review, and today's hits, new translations and failures.
-- **Review**: what the model made and nobody has looked at, most used first. "Looks right", or
-  correct it ("Save as correct" keeps your words and locks them), or "Translate again".
-- **Memory**: search either language; `memory?app=…&lang=…&q=<source>&exact=1` opens one text, for a
+- **Проверка**: what the model made and nobody has looked at, most used first. «Подтвердить перевод»,
+  correct it with «Сохранить исправление», or «Перевести заново».
+- **Память**: search either language; `memory?app=…&lang=…&q=<source>&exact=1` opens one text, for a
   "this translation is wrong" link from your app.
-- **Glossary**: global and per app.
+- **Глоссарий**: global and per app.
 
 Navigation and static assets resolve relative to the mounted URL, so the app works behind a proxy
 under any path. Opening the panel without a session shows a token sign-in form. Submit
