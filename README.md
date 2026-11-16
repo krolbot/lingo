@@ -43,13 +43,17 @@ cp .env.example .env
 # Configure LINGO_LLM_URL, LINGO_MODEL, and LINGO_LLM_KEY if the provider requires it.
 # Add th to LINGO_LANGS for Thai; set LINGO_ADMIN_PORT=8791 and LINGO_ADMIN_TOKEN
 # only if you need the review pages.
+# The Docker network named caddy must already exist on the host with Caddy.
 docker compose up -d --build
 docker compose run --rm lingo node --import tsx src/cli.ts token create --app myapp
 ```
 
-Save the generated app token in your secret manager. The API listens on `127.0.0.1:8790`
-on the host; the optional admin page listens on `127.0.0.1:8791`. Put authentication and HTTPS
-in front of them if remote access is needed. Do not publish either port directly to the Internet.
+Save the generated app token in your secret manager. Compose publishes **no host ports**. Caddy
+must share the external Docker network `caddy` with lingo: proxy the API to `lingo:8790`, and
+the optional admin page to `lingo:8791` when `LINGO_ADMIN_PORT=8791` and `LINGO_ADMIN_TOKEN`
+are set. Configure Caddy's HTTPS and access policy separately; this repository does not define
+domains or Caddy routes. A Caddy instance on a different Docker host cannot use this shared
+network directly and needs an explicitly configured private route instead.
 SQLite (including translation memory, reviews, glossary, and app token hashes) persists in the
 `lingo-data` volume. Keep that volume when recreating the container, and back it up together with
 any glossary file you mount. `docker compose down -v` **deletes** that data.

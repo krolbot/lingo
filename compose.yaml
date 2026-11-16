@@ -8,11 +8,14 @@ services:
       HOST: 0.0.0.0
       PORT: 8790
       LINGO_DB: /data/lingo.db
-    ports:
-      - "127.0.0.1:8790:8790"
-      - "127.0.0.1:8791:8791" # Admin is inactive unless LINGO_ADMIN_PORT=8791 and LINGO_ADMIN_TOKEN are set.
+    networks:
+      - caddy
     volumes:
       - lingo-data:/data
 
 volumes:
   lingo-data:
+
+networks:
+  caddy:
+    external: true
