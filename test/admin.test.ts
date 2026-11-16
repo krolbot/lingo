@@ -20,16 +20,30 @@ const auth = { authorization: "Bearer adm" };
 const form = (o: Record<string, string>) => ({ headers: { ...auth, "content-type": "application/x-www-form-urlencoded" }, payload: new URLSearchParams(o).toString() });
 
 describe("admin", () => {
-  it("needs the token; ?token= sets a cookie and leaves the address clean", async () => {
+  it("renders sign-in on protected pages and accepts the token through the form", async () => {
     const { admin } = await setup();
-    expect((await admin.inject({ url: "/" })).statusCode).toBe(401);
+    const signin = await admin.inject({ url: "/" });
+    expect(signin.statusCode).toBe(401);
+    expect(signin.headers["content-type"]).toContain("text/html");
+    expect(signin.body).toContain('<form method="post" action="login">');
+    expect(signin.body).toContain('name="token" type="password"');
+    expect((await admin.inject({ url: "/glossary/add" })).body).toContain('action="../login"');
     expect((await admin.inject({ url: "/", headers: { authorization: "Bearer nope" } })).statusCode).toBe(401);
     expect((await admin.inject({ url: "/", headers: { cookie: "lingo_admin=%" } })).statusCode).toBe(401);
-    const r = await admin.inject({ url: "/review?token=adm&app=ops" });
-    expect(r.statusCode).toBe(303);
-    expect(r.headers.location).toBe("review?app=ops");
-    expect(String(r.headers["set-cookie"])).toContain("lingo_admin=adm");
+    expect((await admin.inject({ url: "/?token=adm" })).headers["set-cookie"]).toBeUndefined();
+
+    const invalid = await admin.inject({ method: "POST", url: "/login", payload: new URLSearchParams({ token: "wrong" }).toString(), headers: { "content-type": "application/x-www-form-urlencoded" } });
+    expect(invalid.statusCode).toBe(401);
+    expect(invalid.body).toContain('role="alert"');
+    expect(invalid.body).not.toContain("wrong");
+    expect(invalid.headers["set-cookie"]).toBeUndefined();
+
+    const valid = await admin.inject({ method: "POST", url: "/login", payload: new URLSearchParams({ token: "adm" }).toString(), headers: { "content-type": "application/x-www-form-urlencoded" } });
+    expect(valid.statusCode).toBe(303);
+    expect(valid.headers.location).toBe("./");
+    expect(valid.headers["set-cookie"]).toMatch(/lingo_admin=adm; Path=\/; Secure; HttpOnly; SameSite=Strict/);
     expect((await admin.inject({ url: "/", headers: { cookie: "lingo_admin=adm" } })).statusCode).toBe(200);
+    expect((await admin.inject({ url: "/", headers: auth })).statusCode).toBe(200);
   });
 
   it("lists what waits for review, takes corrections, approvals and a request to translate again", async () => {

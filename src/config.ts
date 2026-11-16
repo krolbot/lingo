@@ -23,7 +23,7 @@ export interface Config {
   };
   /** A JSON file with the global glossary, read at start-up (entries the API cannot change). */
   glossaryFile?: string;
-  /** The admin pages' port and the token they need (bearer, or a cookie set by ?token=); no port, no admin pages. */
+  /** The admin pages' port and bearer/form sign-in token; no port, no admin pages. */
   adminPort?: number;
   adminToken?: string;
   /** Bearer for /ops/* (health, metrics, manifest, tools, actions); without it those routes answer 404. */

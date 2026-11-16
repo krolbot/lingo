@@ -108,8 +108,11 @@ With `LINGO_ADMIN_PORT` and `LINGO_ADMIN_TOKEN`, a second port serves pages for 
   "this translation is wrong" link from your app.
 - **Glossary**: global and per app.
 
-Every link and form is relative, so the pages work behind a proxy under any path. The token goes in
-`Authorization: Bearer <token>` (a proxy that does your login adds it), or once as `?token=`, which sets a cookie. A token in a URL can enter proxy logs; prefer a trusted proxy that supplies the header.
+Every link and form is relative, so the pages work behind a proxy under any path. Opening the panel
+without a session shows a token sign-in form. Submit `LINGO_ADMIN_TOKEN` there; the server sets a
+Secure, HttpOnly, SameSite=Strict cookie. API clients can instead use `Authorization: Bearer <token>`.
+Keep the admin port behind a trusted reverse proxy and an IP allowlist or equivalent network boundary.
+Do not put the token in the URL.
 
 ## Client
 

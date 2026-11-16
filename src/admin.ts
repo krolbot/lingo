@@ -30,6 +30,10 @@ const page = (title: string, nav: string, body: string) =>
   `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)} · lingo</title><style>${CSS}</style></head><body>
 <header><b>lingo</b>${[["./", "Overview"], ["review", "Review"], ["memory", "Memory"], ["glossary", "Glossary"]].map(([h, l]) => `<a href="${h}"${nav === l ? ' class="on"' : ""}>${l}</a>`).join("")}</header><main>${body}</main></body></html>`;
 
+const loginPage = (action: string, invalid = false) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sign in · lingo</title><style>${CSS}
+.login{min-height:100dvh;display:grid;place-items:center;padding:24px}.login-card{width:min(100%,400px);padding:32px;background:var(--card);border:1px solid var(--line);border-radius:12px}.login-card h1{font-size:22px;margin:0 0 6px}.login-card p{color:var(--muted);margin:0 0 24px}.login-card label{display:block;font-weight:600;margin-bottom:8px}.login-card input,.login-card button{width:100%;min-height:44px}.login-card button{margin-top:16px}.login-card .error{color:#b42318;margin:0 0 16px}
+</style></head><body><main class="login"><section class="login-card"><h1>lingo</h1><p>Enter your administrator token to open the panel.</p>${invalid ? '<p class="error" role="alert">Invalid token. Try again.</p>' : ""}<form method="post" action="${esc(action)}"><label for="token">Administrator token</label><input id="token" name="token" type="password" autocomplete="current-password" required><button class="primary" type="submit">Sign in</button></form></section></main></body></html>`;
+
 interface Row {
   app: string;
   hash: string;
@@ -60,22 +64,27 @@ export function buildAdmin(cfg: Config, db: Db): FastifyInstance {
     done(null, out);
   });
 
-  // The token as a bearer (a proxy in front), or once as ?token= which sets a cookie (a person).
+  // Bearer for API clients; people submit the token in the sign-in form.
   const want = cfg.adminToken ? createHash("sha256").update(cfg.adminToken).digest() : null;
   const ok = (given: string) => !!want && timingSafeEqual(createHash("sha256").update(given).digest(), want);
   app.addHook("onRequest", async (req: FastifyRequest, reply: FastifyReply) => {
+    reply.header("cache-control", "no-store");
+    if (req.method === "POST" && req.url === "/login") return;
     const bearer = req.headers.authorization?.replace(/^Bearer\s+/i, "") ?? "";
     const cookie = /(?:^|;\s*)lingo_admin=([^;]+)/.exec(req.headers.cookie ?? "")?.[1] ?? "";
-    const token = (req.query as { token?: string })?.token ?? "";
-    if (token && ok(token)) {
-      reply.header("set-cookie", `lingo_admin=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=2592000`);
-      // Relative, like every link here, so it works behind a proxy under any path.
-      const clean = req.url.replace(/([?&])token=[^&]*&?/, "$1").replace(/[?&]$/, "");
-      return reply.redirect(clean.slice(clean.lastIndexOf("/", clean.indexOf("?") < 0 ? undefined : clean.indexOf("?")) + 1) || "./", 303);
-    }
     let decoded = "";
     try { decoded = decodeURIComponent(cookie); } catch { /* malformed cookie is not a credential */ }
-    if (!ok(bearer) && !ok(decoded)) return reply.code(401).type("text/plain").send("lingo admin: a valid token is needed (Authorization: Bearer, or ?token= once)");
+    if (!ok(bearer) && !ok(decoded)) {
+      const depth = req.url.split("?")[0]!.split("/").length - 2;
+      return reply.code(401).type("text/html").send(loginPage(`${"../".repeat(depth)}login`));
+    }
+  });
+
+  app.post<{ Body: Record<string, string | string[] | undefined> }>("/login", async (req, reply) => {
+    const token = req.body?.token;
+    if (typeof token !== "string" || !ok(token)) return reply.code(401).type("text/html").send(loginPage("login", true));
+    reply.header("set-cookie", `lingo_admin=${encodeURIComponent(token)}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=2592000`);
+    return reply.redirect("./", 303);
   });
 
   const apps = () => (db.prepare("SELECT DISTINCT app FROM memory UNION SELECT DISTINCT app FROM tokens ORDER BY 1").all() as Array<{ app: string }>).map((r) => r.app);
