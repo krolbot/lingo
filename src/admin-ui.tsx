@@ -216,19 +216,17 @@ function Channels({ data, options, onSaved }: { data: Data; options: Options; on
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Ошибка запроса"); }
     finally { setBusy(false); }
   }
-  const choices = available.map((value) => ({ value, content: value === "local" ? "Локальная модель · Hy-MT2-7B Q4" : "Внешняя модель", disabled: value === "local" && model?.state !== "ready" }));
+  const choices = available.map((value) => ({ value, content: value === "local" ? "Локальный · Hy-MT2-7B Q4" : "Внешний", disabled: value === "local" && model?.state !== "ready" }));
   return <Flex direction="column" gap="spacing-5">
-    <Text variant="header-1" as="h1">Каналы перевода</Text>
-    <Text color="secondary">Выбор по умолчанию действует для API-запросов без поля channel. Указанный в запросе канал имеет приоритет. Готовый перевод из памяти, исправленный вручную, повторно не переводится.</Text>
+    <Text variant="header-1" as="h1">Каналы</Text>
     <Card><Box padding="spacing-4"><Flex direction="column" gap="spacing-3">
       <Text variant="subheader-2">Локальная модель Hy-MT2-7B Q4</Text>
-      <Text>{!model ? "Локальная модель не настроена" : model.state === "not_installed" ? "Не загружена" : model.state === "downloading" ? `Загрузка: ${new Intl.NumberFormat("ru").format(model.bytes)} из ${new Intl.NumberFormat("ru").format(model.total)} байт (${Math.floor(100 * model.bytes / model.total)} %)` : model.state === "verifying" ? "Проверка SHA-256" : model.state === "starting" ? "Запуск модели" : model.state === "ready" ? "Готова к переводу" : "Ошибка загрузки или запуска"}</Text>
+      <Text>{!model ? "Не настроена" : model.state === "not_installed" ? "Не скачана" : model.state === "downloading" ? `Скачивание: ${new Intl.NumberFormat("ru").format(model.bytes)} из ${new Intl.NumberFormat("ru").format(model.total)} байт (${Math.floor(100 * model.bytes / model.total)}%)` : model.state === "verifying" ? "Проверка файла" : model.state === "starting" ? "Запуск" : model.state === "ready" ? "Готова" : "Ошибка"}</Text>
       {model?.state === "error" && model.error && <Alert theme="danger" message={`Ошибка модели: ${model.error}`} />}
       {model && (model.state === "not_installed" || model.state === "error") && <Flex gap="spacing-2" wrap="wrap">
         {model.state === "error" && <Button loading={busy} onClick={() => void modelAction("start")}>Повторить запуск</Button>}
         <Button view="action" loading={busy} onClick={() => void modelAction("download")}>{model.state === "error" ? "Скачать заново" : "Скачать модель"}</Button>
       </Flex>}
-      <Text color="secondary">Модель загружается после запуска приложения в отдельный постоянный том, а не в образ контейнера.</Text>
     </Flex></Box></Card>
     <Card><Box padding="spacing-4"><Flex direction="column" gap="spacing-3">
       <Text variant="subheader-2">Канал по умолчанию</Text>
